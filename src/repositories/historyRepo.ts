@@ -14,9 +14,14 @@ export interface HistoryRecord {
 
 export class HistoryRepo {
     private db: JsonDB<{ records: HistoryRecord[] }>;
+    private workspaceId?: string;
 
-    constructor() {
-        this.db = new JsonDB('storage/database/history.json');
+    constructor(workspaceId?: string) {
+        this.workspaceId = workspaceId;
+        const dbPath = workspaceId 
+            ? `storage/workspaces/${workspaceId}/database/history.json`
+            : 'storage/database/history.json';
+        this.db = new JsonDB(dbPath);
     }
 
     public async init() {

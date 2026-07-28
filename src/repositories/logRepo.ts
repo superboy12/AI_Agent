@@ -11,9 +11,13 @@ export interface LogEntry {
 
 export class LogRepo {
     private logsDir: string;
+    private workspaceId?: string;
 
-    constructor() {
-        this.logsDir = path.resolve(process.cwd(), 'storage/logs');
+    constructor(workspaceId?: string) {
+        this.workspaceId = workspaceId;
+        this.logsDir = workspaceId
+            ? path.resolve(process.cwd(), `storage/workspaces/${workspaceId}/logs`)
+            : path.resolve(process.cwd(), 'storage/logs');
     }
 
     public async init() {

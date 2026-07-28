@@ -22,9 +22,14 @@ const DEFAULT_SETTINGS: AppSettings = {
 
 export class SettingsRepo {
     private db: JsonDB<AppSettings>;
+    private workspaceId?: string;
 
-    constructor() {
-        this.db = new JsonDB('storage/config/settings.json');
+    constructor(workspaceId?: string) {
+        this.workspaceId = workspaceId;
+        const dbPath = workspaceId 
+            ? `storage/workspaces/${workspaceId}/config/settings.json`
+            : 'storage/config/settings.json';
+        this.db = new JsonDB(dbPath);
     }
 
     public async init() {

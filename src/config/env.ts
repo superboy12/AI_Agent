@@ -7,8 +7,10 @@ dotenv.config();
 export const config = {
     telegramToken: process.env.TELEGRAM_TOKEN || '',
     geminiApiKey: process.env.GEMINI_API_KEY || '',
+    deepseekApiKey: process.env.DEEPSEEK_API_KEY || '',
     discordToken: process.env.DISCORD_TOKEN || '',
-    tempDir: path.join(__dirname, '../../temp'),
+    publicUrl: process.env.PUBLIC_URL || 'http://202.155.143.185',
+    tempDir: path.join(process.cwd(), 'storage', 'temp'),
 };
 
 if (!config.telegramToken) {

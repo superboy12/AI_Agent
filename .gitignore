@@ -3,3 +3,8 @@ node_modules/
 storage/
 dist/
 *.log
+temp/  
+temp_deploy/  
+AiAgent_backup.zip  
+test_convert.js  
+test_gen.ts 

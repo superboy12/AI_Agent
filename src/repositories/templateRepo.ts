@@ -9,13 +9,20 @@ export interface TemplateMetadata {
     usageCount: number;
     isFavorite: boolean;
     filePath: string;
+    fileType?: string;
+    version?: number;
 }
 
 export class TemplateRepo {
     private db: JsonDB<{ templates: TemplateMetadata[] }>;
+    private workspaceId?: string;
 
-    constructor() {
-        this.db = new JsonDB('storage/database/templates.json');
+    constructor(workspaceId?: string) {
+        this.workspaceId = workspaceId;
+        const dbPath = workspaceId 
+            ? `storage/workspaces/${workspaceId}/database/templates.json`
+            : 'storage/database/templates.json';
+        this.db = new JsonDB(dbPath);
     }
 
     public async init() {

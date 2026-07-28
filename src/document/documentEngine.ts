@@ -7,7 +7,11 @@ import ImageModule from 'docxtemplater-image-module-free';
 import libre from 'libreoffice-convert';
 import { promisify } from 'util';
 import sharp from 'sharp';
+import ExcelJS from 'exceljs';
 import { config } from '../config/env';
+import { ImageEngine } from '../image/ImageEngine';
+import { ImagePlacementOptions } from '../image/types';
+import { TemplateAnalysis } from '../repositories/TemplateMetadataRepository';
 
 const libreConvert = promisify(libre.convert);
 
@@ -53,66 +57,99 @@ export class DocumentEngine {
         templatePath: string,
         data: Record<string, any>,
         outputFilename: string,
-        imagePlaceholders?: ImagePlaceholderMap
+        imagePlaceholders?: ImagePlaceholderMap,
+        imageOptions?: ImagePlacementOptions,
+        analysis?: TemplateAnalysis
     ): Promise<string> {
         try {
             const content = fs.readFileSync(templatePath, 'binary');
             const zip = new PizZip(content);
             const modules: any[] = [];
 
-            if (imagePlaceholders && Object.keys(imagePlaceholders).length > 0) {
-                // Pre-process ALL images with sharp BEFORE Docxtemplater runs (sync context)
-                // This normalizes EXIF orientation so dimensions are always visually correct
-                const normalizedImages = new Map<string, { buffer: Buffer; width: number; height: number; density: number }>();
-
-                for (const [placeholderName, filePath] of Object.entries(imagePlaceholders)) {
-                    if (fs.existsSync(filePath)) {
-                        console.log(`[DocumentEngine] Normalizing image for {%${placeholderName}}...`);
-                        const normalized = await this.normalizeImage(filePath);
-                        normalizedImages.set(placeholderName, normalized);
-                        console.log(`[DocumentEngine] {%${placeholderName}}: normalized to ${normalized.width}x${normalized.height}`);
-                    } else {
-                        console.warn(`[DocumentEngine] Image file not found: ${filePath}`);
+            if (analysis && analysis.fields.length > 0) {
+                // Pre-process XML for NON-PLACEHOLDER fields (colon, underline, etc)
+                // This injects {{key}} into the document.xml so docxtemplater can fill it
+                let docXml = zip.file("word/document.xml")?.asText();
+                if (docXml) {
+                    for (const field of analysis.fields) {
+                        if (field.format !== 'placeholder') {
+                            docXml = this.injectPlaceholderIntoXml(docXml, field);
+                        }
                     }
+                    zip.file("word/document.xml", docXml);
+                }
+            }
+
+            if (imagePlaceholders && Object.keys(imagePlaceholders).length > 0) {
+                // Pre-process XML to ensure {gambar} or {{gambar}} becomes {%gambar} so ImageModule catches it
+                let docXml = zip.file("word/document.xml")?.asText();
+                if (docXml) {
+                    for (const key of Object.keys(imagePlaceholders)) {
+                        // Match {key} or {{key}} and replace with {%key}
+                        docXml = docXml.replace(new RegExp(`\\{\\{?${key}\\}\\}?`, 'g'), `{%${key}}`);
+                    }
+                    zip.file("word/document.xml", docXml);
                 }
 
-                const imageModule = new ImageModule({
-                    centered: false,
-                    fileType: 'docx',
-                    getImage: (tagValue: string, tagName: string) => {
-                        const img = normalizedImages.get(tagName);
-                        if (img) {
-                            console.log(`[DocumentEngine] Inserting image for {%${tagName}}`);
-                            return img.buffer;
+                let imageModuleInstance: any;
+
+                if (imageOptions) {
+                    // ── NEW PATH: use ImageEngine for rich processing ──────
+                    console.log('[DocumentEngine] Using ImageEngine for image processing...');
+                    const engine = new ImageEngine();
+                    const docxBuffer = fs.readFileSync(templatePath);
+                    const { module } = await engine.prepareForDocument(imagePlaceholders, imageOptions, docxBuffer);
+                    imageModuleInstance = module;
+                } else {
+                    // ── LEGACY PATH: EXIF normalise + natural size (unchanged) ─
+                    const normalizedImages = new Map<string, { buffer: Buffer; width: number; height: number; density: number }>();
+
+                    for (const [placeholderName, filePath] of Object.entries(imagePlaceholders)) {
+                        if (fs.existsSync(filePath)) {
+                            console.log(`[DocumentEngine] Normalizing image for {%${placeholderName}}...`);
+                            const normalized = await this.normalizeImage(filePath);
+                            normalizedImages.set(placeholderName, normalized);
+                            console.log(`[DocumentEngine] {%${placeholderName}}: normalized to ${normalized.width}x${normalized.height}`);
+                        } else {
+                            console.warn(`[DocumentEngine] Image file not found: ${filePath}`);
                         }
-                        console.warn(`[DocumentEngine] No normalized image found for {%${tagName}}`);
-                        return null;
-                    },
-                    getSize: (imgBuffer: Buffer, tagValue: string, tagName: string) => {
-                        const img = normalizedImages.get(tagName);
-                        if (!img) return [FULL_WIDTH_PX, Math.round(FULL_WIDTH_PX * 0.75)];
-
-                        // Always use natural image size based on DPI metadata.
-                        // This preserves the image's original print size without cropping or distortion.
-                        const density = img.density || 96;
-                        const naturalWidthPx = Math.round((img.width / density) * 96);
-                        const naturalHeightPx = Math.round((img.height / density) * 96);
-
-                        // Only scale down if the image is naturally wider than the page content area
-                        if (naturalWidthPx > FULL_WIDTH_PX) {
-                            const scale = FULL_WIDTH_PX / naturalWidthPx;
-                            const w = FULL_WIDTH_PX;
-                            const h = Math.round(naturalHeightPx * scale);
-                            console.log(`[DocumentEngine] {%${tagName}} → scaled down: ${w}x${h}`);
-                            return [w, h];
-                        }
-
-                        console.log(`[DocumentEngine] {%${tagName}} → natural: ${naturalWidthPx}x${naturalHeightPx}`);
-                        return [naturalWidthPx, naturalHeightPx];
                     }
-                });
 
-                modules.push(imageModule);
+                    imageModuleInstance = new ImageModule({
+                        centered: false,
+                        fileType: 'docx',
+                        getImage: (tagValue: string, tagName: string) => {
+                            const img = normalizedImages.get(tagName);
+                            if (img) {
+                                console.log(`[DocumentEngine] Inserting image for {%${tagName}}`);
+                                return img.buffer;
+                            }
+                            console.warn(`[DocumentEngine] No normalized image found for {%${tagName}}`);
+                            return null;
+                        },
+                        getSize: (imgBuffer: Buffer, tagValue: string, tagName: string) => {
+                            const img = normalizedImages.get(tagName);
+                            if (!img) return [FULL_WIDTH_PX, Math.round(FULL_WIDTH_PX * 0.75)];
+
+                            const density = img.density || 96;
+                            const naturalWidthPx = Math.round((img.width / density) * 96);
+                            const naturalHeightPx = Math.round((img.height / density) * 96);
+
+                            if (naturalWidthPx > FULL_WIDTH_PX) {
+                                const scale = FULL_WIDTH_PX / naturalWidthPx;
+                                const w = FULL_WIDTH_PX;
+                                const h = Math.round(naturalHeightPx * scale);
+                                console.log(`[DocumentEngine] {%${tagName}} → scaled down: ${w}x${h}`);
+                                return [w, h];
+                            }
+
+                            console.log(`[DocumentEngine] {%${tagName}} → natural: ${naturalWidthPx}x${naturalHeightPx}`);
+                            return [naturalWidthPx, naturalHeightPx];
+                        }
+                    });
+                }
+
+                modules.push(imageModuleInstance);
 
                 // Docxtemplater needs a truthy value for each image placeholder key
                 for (const key of Object.keys(imagePlaceholders)) {
@@ -133,16 +170,19 @@ export class DocumentEngine {
                 compression: 'DEFLATE',
             });
 
-            const outputPath = path.join(config.tempDir, outputFilename);
+            const outputPath = path.isAbsolute(outputFilename) ? outputFilename : path.join(config.tempDir, outputFilename);
             fs.writeFileSync(outputPath, buf);
 
             return outputPath;
         } catch (error: any) {
             console.error('[DocumentEngine] Error filling template:', error?.message || error);
+            let detail = '';
             if (error?.properties?.errors) {
+                const msgs = error.properties.errors.map((e: any) => e.properties?.explanation || e.message).join(', ');
+                detail = `\nDetail Kesalahan Format: ${msgs}`;
                 console.error('[DocumentEngine] Template errors:', JSON.stringify(error.properties.errors));
             }
-            throw new Error(`Gagal mengisi template dokumen: ${error?.message || 'Template mungkin rusak atau tidak valid.'}`);
+            throw new Error(`Gagal mengisi template dokumen: ${error?.message || 'Template rusak.'}${detail}`);
         }
     }
 
@@ -154,13 +194,36 @@ export class DocumentEngine {
             const fileBuf = fs.readFileSync(docxPath);
             const pdfBuf = await libreConvert(fileBuf, '.pdf', undefined);
 
-            const outputPath = path.join(config.tempDir, outputFilename);
+            const outputPath = path.isAbsolute(outputFilename) ? outputFilename : path.join(config.tempDir, outputFilename);
             fs.writeFileSync(outputPath, pdfBuf);
 
             return outputPath;
         } catch (error) {
             console.error('[DocumentEngine] Error converting to PDF:', error);
             throw new Error('Gagal mengkonversi dokumen ke PDF. Pastikan LibreOffice terinstal.');
+        }
+    }
+
+    /**
+     * Converts a PDF file to DOCX using LibreOffice.
+     */
+    public async convertToDocx(pdfPath: string, outputFilename: string): Promise<string> {
+        try {
+            const libreConvertWithOptions = require('util').promisify(require('libreoffice-convert').convertWithOptions);
+            const fileBuf = fs.readFileSync(pdfPath);
+            const options = {
+                fileName: 'source.pdf', // Tell LibreOffice it is a PDF
+                sofficeAdditionalArgs: ['--infilter=writer_pdf_import'] // Force Writer to import it
+            };
+            const docxBuf = await libreConvertWithOptions(fileBuf, '.docx', undefined, options);
+
+            const outputPath = path.join(config.tempDir, outputFilename);
+            fs.writeFileSync(outputPath, docxBuf);
+
+            return outputPath;
+        } catch (error) {
+            console.error('[DocumentEngine] Error converting to DOCX:', error);
+            throw new Error('Gagal mengkonversi dokumen ke DOCX. Pastikan LibreOffice terinstal.');
         }
     }
 
@@ -270,5 +333,83 @@ export class DocumentEngine {
         fs.writeFileSync(outputPath, buffer);
         
         return outputPath;
+    }
+
+    /**
+     * Creates a new XLSX document from scratch based on structured JSON data.
+     */
+    public async createExcelFromScratch(
+        data: any,
+        outputFilename: string
+    ): Promise<string> {
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = 'AI Agent';
+        workbook.created = new Date();
+
+        if (data.sheets && Array.isArray(data.sheets)) {
+            for (const sheetData of data.sheets) {
+                const sheetName = sheetData.name || 'Sheet1';
+                const sheet = workbook.addWorksheet(sheetName);
+
+                if (sheetData.rows && Array.isArray(sheetData.rows)) {
+                    sheetData.rows.forEach((row: any[]) => {
+                        sheet.addRow(row);
+                    });
+                }
+                
+                // Bold the first row (assuming it's header)
+                sheet.getRow(1).font = { bold: true };
+                
+                // Auto-fit columns roughly
+                sheet.columns.forEach(column => {
+                    let maxLength = 0;
+                    column.eachCell!({ includeEmpty: true }, cell => {
+                        const columnLength = cell.value ? cell.value.toString().length : 10;
+                        if (columnLength > maxLength) maxLength = columnLength;
+                    });
+                    column.width = maxLength < 10 ? 10 : maxLength + 2;
+                });
+            }
+        } else {
+            // Fallback if structure is wrong
+            const sheet = workbook.addWorksheet('Sheet1');
+            sheet.addRow(['No Data Provided']);
+        }
+
+        const outputPath = path.join(config.tempDir, outputFilename);
+        await workbook.xlsx.writeFile(outputPath);
+        
+        return outputPath;
+    }
+
+    /**
+     * XML Injector: Safely finds non-placeholder labels (like "Nama :") despite XML tags
+     * and appends ` {{key}}` so Docxtemplater can process it normally.
+     */
+    private injectPlaceholderIntoXml(xml: string, field: { label: string, key: string, format: string }): string {
+        const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const labelChars = field.label.trim().split('').map(escapeRegex);
+        const interTag = '(?:<[^>]+>)*';
+        
+        let regexStr = labelChars.join(interTag);
+
+        // Add suffix based on format to match the full pattern
+        if (field.format === 'colon') {
+            regexStr += '\\s*' + interTag + ':' + interTag;
+        } else if (field.format === 'equals') {
+            regexStr += '\\s*' + interTag + '=' + interTag;
+        } else if (field.format === 'underline') {
+            regexStr += '\\s*' + interTag + '(?:_' + interTag + '){3,}';
+        } else if (field.format === 'dots') {
+            regexStr += '\\s*' + interTag + '(?:\\.' + interTag + '){3,}';
+        }
+
+        const regex = new RegExp(regexStr, 'g');
+        
+        return xml.replace(regex, (match) => {
+            // Append the docxtemplater placeholder at the end of the matched text run
+            // Using a new run (<w:r>) ensures it's rendered inline
+            return match + `<w:r><w:t xml:space="preserve"> {{${field.key}}}</w:t></w:r>`;
+        });
     }
 }

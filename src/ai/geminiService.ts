@@ -1,5 +1,6 @@
 import { GoogleGenAI, Part } from '@google/genai';
 import fs from 'fs';
+import sharp from 'sharp';
 import { config } from '../config/env';
 
 export interface ImageData {
@@ -14,9 +15,17 @@ export interface GeminiDocumentResult {
 
 export class GeminiService {
     private ai: GoogleGenAI;
+    private static instance: GeminiService;
 
-    constructor() {
+    private constructor() {
         this.ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+    }
+
+    public static getInstance(): GeminiService {
+        if (!GeminiService.instance) {
+            GeminiService.instance = new GeminiService();
+        }
+        return GeminiService.instance;
     }
 
     /**
@@ -24,11 +33,14 @@ export class GeminiService {
      * Returns them in the order they appear in the document.
      */
     public extractImagePlaceholders(documentText: string): string[] {
-        const regex = /\{%(\w+)\}/g;
+        const regex = /\{%?\{?(\w+)\}?\}/g;
         const found: string[] = [];
         let match;
         while ((match = regex.exec(documentText)) !== null) {
-            if (!found.includes(match[1])) found.push(match[1]);
+            const name = match[1];
+            if (match[0].startsWith('{%') || /gambar|foto|image|img|pic/i.test(name)) {
+                if (!found.includes(name)) found.push(name);
+            }
         }
         return found;
     }
@@ -45,7 +57,8 @@ export class GeminiService {
     public async generateDocumentData(
         documentText: string,
         userInstruction: string,
-        imagesData?: ImageData[]
+        imagesData?: ImageData[],
+        excelData?: string
     ): Promise<GeminiDocumentResult> {
         const imagePlaceholderNames = this.extractImagePlaceholders(documentText);
         const hasImages = imagesData && imagesData.length > 0;
@@ -56,6 +69,10 @@ export class GeminiService {
 
         const imageCountNote = hasImages
             ? `\nUser melampirkan ${imagesData!.length} gambar. Baca dan ekstrak informasi TEKS yang relevan dari gambar-gambar tersebut untuk melengkapi data dokumen.`
+            : '';
+
+        const excelNote = excelData
+            ? `\n\nData Excel:\n"""\n${excelData}\n"""\n\nCatatan Khusus Excel: User melampirkan file Excel. Tugas Anda adalah membaca, menganalisis struktur tabel, dan membuat kesimpulan atau laporan naratif dalam bahasa Indonesia yang formal. Jangan sekadar menyalin tabel. Rangkum isinya, kenali kolom seperti tanggal, lokasi, kegiatan, hasil, dan kendala secara cerdas, lalu gunakan narasi tersebut untuk mengisi placeholder DOCX yang sesuai.`
             : '';
 
         const textPrompt = `Anda adalah AI Document Assistant profesional.
@@ -71,11 +88,11 @@ Instruksi User:
 """
 ${userInstruction}
 """
-${imageCountNote}${imagePlaceholderNote}
+${imageCountNote}${imagePlaceholderNote}${excelNote}
 
 Aturan:
-1. Pahami instruksi user${hasImages ? ' dan baca informasi dari gambar yang dilampirkan' : ''}, perbaiki tata bahasa menjadi formal dan profesional.
-2. Jangan mengarang informasi. Jika informasi untuk sebuah field tidak tersedia, gunakan "-" atau string kosong sesuai konteks.
+1. Pahami instruksi user${hasImages ? ' dan gambar' : ''}${excelData ? ' beserta data Excel' : ''}, perbaiki tata bahasa menjadi formal dan profesional.
+2. Jangan mengarang informasi. Jika informasi untuk sebuah field tidak tersedia, gunakan "-" atau string kosong sesuai konteks. KHUSUS untuk field yang mengandung kata kunci (ttd, signature, wfo, WFO, tk, TK), JANGAN gunakan "-" atau kosong, melainkan kembalikan nama placeholdernya lengkap dengan kurung kurawal (contoh: "{ttd_pengirim}", "{wfo_status}").
 3. Anda HANYA boleh mengembalikan data dalam format JSON yang valid. Hanya untuk placeholder TEKS, bukan placeholder gambar ({%...}).
 4. Key pada JSON harus sesuai dengan nama placeholder teks yang Anda temukan (tanpa kurung kurawal).
 5. Jangan mengembalikan markdown, kode blocks, atau teks penjelasan. Hanya JSON murni.
@@ -90,11 +107,20 @@ Contoh output:
             for (let i = 0; i < imagesData!.length; i++) {
                 const imgData = imagesData![i];
                 try {
-                    const imageBuffer = fs.readFileSync(imgData.path);
+                    let imageBuffer = fs.readFileSync(imgData.path);
+                    
+                    // Resize large images for AI payload to prevent "Request entity too large" (HTTP 413).
+                    // This downscaling is ONLY for the AI's OCR and context extraction,
+                    // it does NOT overwrite the original image file used in the document.
+                    imageBuffer = await sharp(imageBuffer)
+                        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+                        .jpeg({ quality: 80 })
+                        .toBuffer();
+
                     const base64Image = imageBuffer.toString('base64');
                     parts.push({
                         inlineData: {
-                            mimeType: imgData.mimeType,
+                            mimeType: 'image/jpeg', // We forced jpeg above
                             data: base64Image,
                         }
                     });
@@ -155,7 +181,10 @@ Jangan mengembalikan markdown, kode blocks, atau teks penjelasan. Hanya JSON mur
 
 Struktur JSON yang diharapkan:
 {
+  "format": "docx", // atau "xlsx" sesuai permintaan user
   "title": "Judul Dokumen (digunakan untuk nama file jika ada)",
+  
+  // JIKA format = "docx", sertakan 'content'
   "content": [
     {
       "type": "heading",
@@ -177,12 +206,23 @@ Struktur JSON yang diharapkan:
         ["Baris 1 Kolom 1", "Baris 1 Kolom 2"]
       ]
     }
+  ],
+
+  // JIKA format = "xlsx", sertakan 'sheets'
+  "sheets": [
+    {
+      "name": "Sheet1",
+      "rows": [
+        ["Header 1", "Header 2", "Header 3"], // baris pertama otomatis ditebalkan
+        ["Data 1", "Data 2", "Data 3"]
+      ]
+    }
   ]
 }
 
 Aturan tambahan:
-1. Pahami instruksi user dengan baik. Buat dokumen dengan bahasa formal dan profesional (bahasa Indonesia, kecuali diminta lain).
-2. Jika tipe elemen tidak sesuai, gunakan salah satu dari: "heading", "paragraph", "list", atau "table".
+1. Pahami instruksi user dengan baik. Jika user meminta Excel, spreadsheet, atau .xlsx, set "format": "xlsx". Jika meminta dokumen, surat, laporan, .docx, set "format": "docx".
+2. Untuk "docx", gunakan property "content". Untuk "xlsx", gunakan property "sheets".
 3. PASTIKAN JSON valid dan tidak ada karakter markdown (seperti \`\`\`json).
 
 Instruksi User:
@@ -197,11 +237,18 @@ ${imageCountNote}`;
             for (let i = 0; i < imagesData!.length; i++) {
                 const imgData = imagesData![i];
                 try {
-                    const imageBuffer = fs.readFileSync(imgData.path);
+                    let imageBuffer = fs.readFileSync(imgData.path);
+                    
+                    // Resize for AI payload to prevent 413 Payload Too Large
+                    imageBuffer = await sharp(imageBuffer)
+                        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+                        .jpeg({ quality: 80 })
+                        .toBuffer();
+
                     const base64Image = imageBuffer.toString('base64');
                     parts.push({
                         inlineData: {
-                            mimeType: imgData.mimeType,
+                            mimeType: 'image/jpeg',
                             data: base64Image,
                         }
                     });
@@ -276,5 +323,17 @@ ${imageCountNote}`;
 
     public clearChat(userId: string): void {
         this.chatHistory.delete(userId);
+    }
+
+    /**
+     * One-shot generation — no chat history, no side effects.
+     * Used by ImageEngine's auto_ai mode resolver.
+     */
+    public async generateSimple(prompt: string): Promise<string> {
+        const response = await this.ai.models.generateContent({
+            model:    'gemini-flash-latest',
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        });
+        return response.text ?? '';
     }
 }

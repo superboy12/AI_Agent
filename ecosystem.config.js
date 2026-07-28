@@ -2,9 +2,10 @@ module.exports = {
   apps: [
     {
       name: "AiBot",
-      script: "node_modules/tsx/dist/cli.mjs",
-      args: "src/index.ts",
-      cwd: "D:\\AiAgent",
+      script: "npm",
+      args: "run start",
+      interpreter: "none",
+      cwd: __dirname,
       watch: false
     }
   ]
