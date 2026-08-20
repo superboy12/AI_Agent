@@ -1,4 +1,5 @@
 import { JsonDB } from '../utils/jsonDB';
+import { SocketManager } from '../services/monitor/SocketManager';
 
 export interface HistoryRecord {
     id: string;
@@ -42,7 +43,17 @@ export class HistoryRepo {
         const data = await this.db.read();
         if (!data) return false;
         data.records.push(record);
-        return await this.db.write(data);
+        const success = await this.db.write(data);
+        if (success) {
+            SocketManager.getInstance().emitActivity({
+                time: record.generateDate,
+                user: record.userId,
+                action: record.templateName === 'N/A (Dari Nol)' ? 'Generate from scratch' : 'Generate DOCX',
+                status: record.status === 'success' ? 'Success' : 'Failed',
+                details: record.filename
+            });
+        }
+        return success;
     }
 
     public async getById(id: string): Promise<HistoryRecord | undefined> {

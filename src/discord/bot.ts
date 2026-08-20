@@ -95,6 +95,8 @@ export class DiscordBot {
             const userId = message.author.id;
             const docxAttachment = this.getDocxAttachment(message.attachments);
             const imageAttachments = this.getImageAttachments(message.attachments);
+            const zipAttachment = (this as any).getZipAttachment ? (this as any).getZipAttachment(message.attachments) : message.attachments.find(a => a.name?.toLowerCase().endsWith('.zip'));
+            const excelAttachments = (this as any).getExcelAttachments ? (this as any).getExcelAttachments(message.attachments) : Array.from(message.attachments.values()).filter(a => a.name?.toLowerCase().endsWith('.xlsx') || a.name?.toLowerCase().endsWith('.xls'));
 
             const msgLower = caption.trim().toLowerCase();
 
@@ -158,6 +160,270 @@ export class DiscordBot {
                 await message.reply('Perintah !workspace tersedia:\n- `!workspace list`\n- `!workspace switch <nama>`\n- `!workspace switch global`');
                 return;
             }
+
+            // Handle AI Cache & Learning Commands
+            if (msgLower === '!cache') {
+                const { cacheService } = require('../services/ai/CacheService');
+                const stats = await cacheService.getStats();
+                const desc = `📦 **Total Cached Documents:** ${stats.totalCacheEntries}\n` +
+                             `🎯 **Cache Hits:** ${stats.totalHits}\n` +
+                             `❌ **Cache Misses:** ${stats.totalMisses}\n` +
+                             `⚡ **Hit Ratio:** ${stats.hitRatio.toFixed(1)}%`;
+                await message.reply({ embeds: [{ color: 0x10b981, title: '🧠 AI Smart Cache Status', description: desc }] });
+                return;
+            }
+
+            if (msgLower === '!learning') {
+                const { learningService } = require('../services/ai/LearningService');
+                const profile = await learningService.getProfile(userId);
+                let recTemplate = await learningService.getRecommendation(userId);
+                let desc = `🧑 **User ID:** ${userId}\n`;
+                if (recTemplate) {
+                    desc += `💡 **Rekomendasi AI:** Gunakan Template **${recTemplate}** (Confidence: >90%)\n`;
+                }
+                desc += `\n**Favorite Templates:**\n`;
+                if (Object.keys(profile.favoriteTemplates).length > 0) {
+                    for (const [tpl, count] of Object.entries(profile.favoriteTemplates)) {
+                        desc += `- ${tpl} (${count}x)\n`;
+                    }
+                } else {
+                    desc += `- Belum ada data\n`;
+                }
+                await message.reply({ embeds: [{ color: 0x8b5cf6, title: '📈 AI Continuous Learning Profile', description: desc }] });
+                return;
+            }
+
+            if (msgLower === '!reset-learning') {
+                const { learningService } = require('../services/ai/LearningService');
+                await learningService.resetLearning(userId);
+                await message.reply('✅ Profil AI Continuous Learning Anda telah direset.');
+                return;
+            }
+
+            // Handle Merge Excel Command
+            if (msgLower === '!merge-excel' || msgLower === '!mergeexcel') {
+                if (excelAttachments.length < 2 && !zipAttachment) {
+                    await message.reply('❌ Mohon unggah minimal 2 file Excel atau 1 file ZIP yang berisi file Excel beserta perintah ini.');
+                    return;
+                }
+                
+                const processMsg = await message.reply('⏳ Sedang menggabungkan file Excel Anda...');
+                
+                try {
+                    let localExcelPaths: string[] = [];
+                    const extractDir = require('path').join(process.cwd(), 'temp', `extracted_${Date.now()}`);
+                    
+                    if (zipAttachment) {
+                        const AdmZip = require('adm-zip');
+                        const zipPath = await agentService.fileHandler.downloadFile(zipAttachment.url, zipAttachment.name);
+                        const zip = new AdmZip(zipPath);
+                        require('fs').mkdirSync(extractDir, { recursive: true });
+                        zip.extractAllTo(extractDir, true);
+                        
+                        const entries = zip.getEntries();
+                        for (const entry of entries) {
+                            if (!entry.isDirectory && (entry.entryName.toLowerCase().endsWith('.xlsx') || entry.entryName.toLowerCase().endsWith('.xls'))) {
+                                localExcelPaths.push(require('path').join(extractDir, entry.entryName));
+                            }
+                        }
+                    } else {
+                        // Download multiple attachments
+                        for (const att of excelAttachments) {
+                            const localPath = await agentService.fileHandler.downloadFile(att.url, att.name);
+                            localExcelPaths.push(localPath);
+                        }
+                    }
+
+                    if (localExcelPaths.length < 2) {
+                        await processMsg.edit('❌ Tidak cukup file Excel untuk digabungkan (minimal butuh 2).');
+                        return;
+                    }
+
+                    const mergedPath = await agentService.excelMergeService.mergeExcelFiles(localExcelPaths);
+                    await message.reply({
+                        content: `✅ Berhasil menggabungkan ${localExcelPaths.length} file Excel!`,
+                        files: [mergedPath]
+                    });
+                    
+                    try {
+                        await processMsg.delete();
+                    } catch (e) {}
+                    
+                    // Cleanup
+                    try {
+                        const fs = require('fs');
+                        if (fs.existsSync(extractDir)) {
+                            fs.rmSync(extractDir, { recursive: true, force: true });
+                        }
+                    } catch (e) {}
+
+                } catch (err: any) {
+                    await processMsg.edit(`❌ Gagal menggabungkan Excel: ${err.message}`);
+                }
+                return;
+            }
+
+
+            // Handle Replace Excel Command
+            if (msgLower.startsWith('!replace-excel') || msgLower.startsWith('!replaceexcel')) {
+                const instruction = caption.replace(/^!replace-?excel/i, '').trim();
+                
+                if (!instruction) {
+                    await message.reply('❌ Mohon berikan instruksi penggantian teks (contoh: `!replace-excel ganti Budi jadi Andi`).');
+                    return;
+                }
+
+                let useActiveTemplate = false;
+                let activeTemplatePath = '';
+                let isZipTemplate = false;
+
+                if (!zipAttachment && excelAttachments.length === 0) {
+                    const activeTemplate = agentService.templateManager.getActiveTemplate(userId);
+                    if (activeTemplate) {
+                        if (activeTemplate.type === 'registry') {
+                            activeTemplatePath = activeTemplate.metadata.filePath;
+                            isZipTemplate = activeTemplate.metadata.fileType === 'zip' || activeTemplatePath.endsWith('.zip');
+                        } else {
+                            activeTemplatePath = activeTemplate.path;
+                            isZipTemplate = activeTemplatePath.endsWith('.zip');
+                        }
+                        
+                        if (require('fs').existsSync(activeTemplatePath)) {
+                            useActiveTemplate = true;
+                        } else {
+                            await message.reply('❌ File template aktif tidak ditemukan di sistem.');
+                            return;
+                        }
+                    } else {
+                        await message.reply('❌ Mohon unggah file Excel/ZIP atau pilih template aktif (gunakan `!use <id>`) beserta perintah ini.');
+                        return;
+                    }
+                }
+                
+                const processMsg = await message.reply('⏳ Sedang memproses instruksi dan file Anda...');
+                
+                try {
+                    let localExcelPaths: string[] = [];
+                    const extractDir = require('path').join(process.cwd(), 'temp', `extracted_replace_${Date.now()}`);
+                    
+                    if (zipAttachment || isZipTemplate) {
+                        const AdmZip = require('adm-zip');
+                        const zipPath = zipAttachment ? await agentService.fileHandler.downloadFile(zipAttachment.url, zipAttachment.name) : activeTemplatePath;
+                        const zip = new AdmZip(zipPath);
+                        require('fs').mkdirSync(extractDir, { recursive: true });
+                        zip.extractAllTo(extractDir, true);
+                        
+                        const entries = zip.getEntries();
+                        for (const entry of entries) {
+                            if (!entry.isDirectory && (entry.entryName.toLowerCase().endsWith('.xlsx') || entry.entryName.toLowerCase().endsWith('.xls'))) {
+                                localExcelPaths.push(require('path').join(extractDir, entry.entryName));
+                            }
+                        }
+                    } else {
+                        // Download single/multiple attachments or use active template excel
+                        require('fs').mkdirSync(extractDir, { recursive: true });
+                        if (useActiveTemplate) {
+                            const newPath = require('path').join(extractDir, require('path').basename(activeTemplatePath));
+                            require('fs').copyFileSync(activeTemplatePath, newPath);
+                            localExcelPaths.push(newPath);
+                        } else {
+                            for (const att of excelAttachments) {
+                            const localPath = await agentService.fileHandler.downloadFile(att.url, att.name);
+                            const newPath = require('path').join(extractDir, att.name);
+                            require('fs').renameSync(localPath, newPath); // Move to extractDir so we can zip it easily later
+                                localExcelPaths.push(newPath);
+                            }
+                        }
+                    }
+
+                    if (localExcelPaths.length === 0) {
+                        await processMsg.edit('❌ Tidak ditemukan file Excel untuk diproses.');
+                        return;
+                    }
+
+                    // Parse instruction
+                    await processMsg.edit('🧠 Menerjemahkan instruksi...');
+                    let rules: any[] = [];
+                    try {
+                        rules = await agentService.geminiService.parseReplacementInstruction(instruction);
+                    } catch (aiError: any) {
+                        await processMsg.edit(`❌ Terjadi kesalahan saat menerjemahkan instruksi: ${aiError.message}`);
+                        return;
+                    }
+                    
+                    if (!rules || rules.length === 0) {
+                        await processMsg.edit('❌ Gagal memahami instruksi penggantian. Pastikan kalimat Anda jelas (misal: "ganti X menjadi Y").');
+                        return;
+                    }
+
+                    // Format rules for display
+                    let rulesDesc = rules.map((r: any) => `- "${r.target}" ➔ "${r.replacement}"`).join('\n');
+
+                    await processMsg.edit(`⚙️ Menerapkan ${rules.length} aturan pada ${localExcelPaths.length} file...\n${rulesDesc}`);
+                    
+                    await agentService.excelModifierService.batchReplace(localExcelPaths, rules);
+                    
+                    // Compress back to zip
+                    const ZipService = require('../services/zipService').ZipService;
+                    const zipService = new ZipService();
+                    const outZipPath = require('path').join(process.cwd(), 'temp', `Hasil_Replace_${Date.now()}.zip`);
+                    
+                    await zipService.compressFolder(extractDir, outZipPath);
+                    
+                    const stats = require('fs').statSync(outZipPath);
+                    const fileSizeMB = stats.size / (1024 * 1024);
+
+                    if (fileSizeMB > 8) {
+                        const jobId = `replace_${Date.now()}`;
+                        const fileId = `${jobId}.zip`;
+                        const destDir = require('path').join(process.cwd(), 'storage', 'downloads');
+                        require('fs').mkdirSync(destDir, { recursive: true });
+                        const destPath = require('path').join(destDir, fileId);
+                        require('fs').copyFileSync(outZipPath, destPath);
+                        
+                        const JobManager = require('../managers/jobManager').JobManager;
+                        await JobManager.getInstance().getBatchService().getRepo().add({
+                            id: jobId,
+                            userId: message.author.id,
+                            type: 'excel-replace',
+                            status: 'completed',
+                            progress: 100,
+                            createdAt: Date.now(),
+                            updatedAt: Date.now(),
+                            expireAt: Date.now() + 24 * 60 * 60 * 1000 // 24 hours
+                        });
+
+                        await message.reply({
+                            content: `✅ Selesai memodifikasi ${localExcelPaths.length} file Excel!\n\nKarena ukuran file terlalu besar untuk Discord (${fileSizeMB.toFixed(2)} MB), silakan download file hasil modifikasi melalui link berikut:\n🔗 **[Klik Disini untuk Download](https://maker-tomorrow-facts-trying.trycloudflare.com/download/${fileId})**`
+                        });
+                    } else {
+                        await message.reply({
+                            content: `✅ Selesai memodifikasi ${localExcelPaths.length} file Excel!`,
+                            files: [outZipPath]
+                        });
+                    }
+                    
+                    try {
+                        await processMsg.delete();
+                    } catch (e) {}
+                    
+                    // Cleanup
+                    try {
+                        const fs = require('fs');
+                        if (fs.existsSync(extractDir)) {
+                            fs.rmSync(extractDir, { recursive: true, force: true });
+                        }
+                        if (fs.existsSync(outZipPath)) {
+                            fs.unlinkSync(outZipPath);
+                        }
+                    } catch (e) {}
+
+                } catch (err: any) {
+                    await processMsg.edit(`❌ Gagal memodifikasi Excel: ${err.message}`);
+                }
+                return;
+            }
+
 
             // Handle Chat Command (!chat or ?chat)
             if (msgLower.startsWith('!chat') || msgLower.startsWith('?chat')) {
@@ -573,28 +839,32 @@ export class DiscordBot {
                     description: 'Berikut adalah panduan lengkap cara menggunakan bot ini:',
                     fields: [
                         {
-                            name: '📝 1. Membuat Dokumen Baru (!buat / ?buat)',
-                            value: 'Gunakan `!buat <instruksi>` untuk membuat dokumen (atau Excel) dari nol dengan Gemini.\nGunakan `?buat <instruksi>` untuk menggunakan Deepseek.\n*Contoh:* `!buatkan jadwal piket dalam format excel`'
+                            name: '📝 1. Manajemen Template (!save & !use)',
+                            value: '- `!save <nama>`: Upload file DOCX lalu beri caption ini untuk menyimpannya ke database.\n- `!use <nama/nomor>`: Gunakan template tersimpan.\n- `!template list`: Melihat daftar template.'
                         },
                         {
-                            name: '🧠 2. Menyimpan Ingatan / Data Referensi (!ingat / !lupa)',
-                            value: 'Upload file Excel (.xlsx) / Word (.docx) atau kirim teks dengan pesan `!ingat`. Bot akan mengingat data tersebut. Gunakan `!lupa` untuk menghapusnya.\n*Contoh:* Upload data.xlsx dengan pesan `!ingat data keuangan`.'
+                            name: '📊 2. Auto-Fill & Batch Excel (!replace-excel)',
+                            value: 'Setelah memilih template (via `!use`), upload file `.zip` (isi ratusan `.xlsx`) atau file `.xlsx` satuan dengan caption:\n`!replace-excel <instruksi modifikasi>` (misal: !replace-excel ganti Budi jadi Andi)'
                         },
                         {
-                            name: '📁 3. Menggunakan Template (!template)',
-                            value: '- `!template upload <kategori>`: Upload file DOCX kosong sebagai template.\n- `!template list`: Melihat daftar template tersimpan.\n- `!template pakai <nomor> <instruksi>`: Mengisi template tersimpan dengan instruksi Anda (atau digabungkan dengan ingatan).'
+                            name: '🧠 3. Menyimpan Ingatan (!ingat & !lupa)',
+                            value: 'Kirim file Excel/Word atau teks dengan pesan `!ingat`. Bot akan mengingatnya. Gunakan `!lupa` untuk menghapus.'
                         },
                         {
-                            name: '🗣️ 4. Chat Biasa (!chat / ?chat)',
-                            value: 'Gunakan `!chat <pesan>` untuk bertanya seperti ChatGPT biasa (tanpa buat dokumen). Gunakan `!chat clear` untuk mereset obrolan.'
+                            name: '🤖 4. Buat Dokumen Baru (!buat & ?buat)',
+                            value: 'Gunakan `!buat <instruksi>` (Gemini) atau `?buat <instruksi>` (Deepseek) untuk membuat dokumen dari nol.'
                         },
                         {
-                            name: '📄 5. Auto-Fill Dokumen & Ekstrak Gambar (Upload Dokumen)',
-                            value: 'Upload file DOCX (template placeholder `{%nama}`) beserta instruksi Anda di caption:\n- Default / awalan `!` menggunakan AI **Gemini**.\n- Awalan `?` (contoh: `?Tolong isikan...`) menggunakan AI **Deepseek**.\n\n*Catatan:* Anda juga bisa mengupload **gambar/foto** secara bersamaan dengan template DOCX. AI akan membaca teks dari gambar tersebut untuk dimasukkan ke dalam template!'
+                            name: '🗣️ 5. Chat Biasa (!chat / ?chat)',
+                            value: 'Gunakan `!chat <pesan>` untuk ngobrol biasa tanpa membuat dokumen.'
                         },
                         {
                             name: '🖼️ 6. Image Engine (!image)',
-                            value: 'Atur cara gambar ditempatkan di dokumen.\nContoh: `!image mode fit_to_width`, `!image layout grid`, `!image shadow on`\nKetik `!image help` untuk semua sub-perintah.'
+                            value: 'Atur cara gambar ditempatkan di dokumen.\nContoh: `!image mode fit_to_width`, `!image layout grid`'
+                        },
+                        {
+                            name: '🌐 7. Web Monitoring & Manual Upload',
+                            value: 'Pantau storage dan upload file ZIP/Template berukuran besar melalui:\nhttps://maker-tomorrow-facts-trying.trycloudflare.com/monitor/'
                         }
                     ],
                     footer: { text: 'Ketik !help kapan saja untuk melihat pesan ini.' }
@@ -835,8 +1105,7 @@ export class DiscordBot {
                 return;
             }
 
-            const zipAttachment = this.getZipAttachment(message.attachments);
-            const excelAttachments = this.getExcelAttachments(message.attachments);
+            // (zipAttachment and excelAttachments are now declared at the top)
 
             // Handle Active Template / Processing mode
             const activeTemplateState = agentService.templateManager.getActiveTemplate(userId);

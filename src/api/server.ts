@@ -1,25 +1,33 @@
 import express from 'express';
+import http from 'http';
+import { SocketManager } from '../services/monitor/SocketManager';
 import cors from 'cors';
 import multer from 'multer';
 import path from 'path';
 import { WorkspaceController } from '../controllers/workspaceController';
 import { ImageController } from '../controllers/imageController';
 import { JobController } from '../controllers/jobController';
+import { TemplateController } from '../controllers/templateController';
 import { config } from '../config/env';
 
 export class ApiServer {
     private app: express.Application;
+    private server: http.Server;
     private workspaceController: WorkspaceController;
     private imageController: ImageController;
     private jobController: JobController;
+    private templateController: TemplateController;
     private upload: multer.Multer;
 
     constructor() {
         this.app = express();
+        this.server = http.createServer(this.app);
         this.workspaceController = new WorkspaceController();
         this.imageController = new ImageController();
         this.jobController = new JobController();
-        this.upload = multer({ dest: 'storage/temp/' });
+        this.templateController = new TemplateController();
+        // Increase limit for large ZIP uploads
+        this.upload = multer({ dest: 'storage/temp/', limits: { fileSize: 500 * 1024 * 1024 } });
 
         this.setupMiddleware();
         this.setupRoutes();
@@ -30,6 +38,13 @@ export class ApiServer {
         this.app.use(express.json());
         // Serve static files for dashboard frontend
         this.app.use(express.static(path.join(process.cwd(), 'public')));
+        
+        // Serve static files for the new React monitoring frontend
+        this.app.use('/monitor', express.static(path.join(process.cwd(), 'public/monitor')));
+        // SPA fallback for React router
+        this.app.get(/^\/monitor\/.*/, (req, res) => {
+            res.sendFile(path.join(process.cwd(), 'public/monitor/index.html'));
+        });
     }
 
     private setupRoutes() {
@@ -48,6 +63,32 @@ export class ApiServer {
         
         this.app.get('/api/workspaces/:id/stats', this.workspaceController.getWorkspaceStats);
 
+        // Template Routes
+        this.app.get('/api/templates', this.templateController.getTemplates);
+        this.app.post('/api/templates/upload', this.upload.single('file'), this.templateController.uploadTemplate);
+        this.app.delete('/api/templates/:id', this.templateController.deleteTemplate);
+
+        // ─── AI Cache & Learning Routes ───────────────────────────────────────
+        this.app.get('/api/cache/stats', async (req, res) => {
+            try {
+                const { cacheService } = require('../services/ai/CacheService');
+                const stats = await cacheService.getStats();
+                res.json(stats);
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+        
+        this.app.get('/api/learning/stats', async (req, res) => {
+            try {
+                const { learningService } = require('../services/ai/LearningService');
+                const stats = await learningService.getStats();
+                res.json(stats);
+            } catch (err: any) {
+                res.status(500).json({ error: err.message });
+            }
+        });
+
         // ─── Image Engine Routes ──────────────────────────────────────────────
         const imgUpload = multer({ dest: 'storage/temp/' });
         this.app.get('/api/image/modes', this.imageController.getModes);
@@ -65,8 +106,13 @@ export class ApiServer {
 
     public start() {
         const port = process.env.PORT || 3000;
-        this.app.listen(port, () => {
+        
+        // Initialize Socket.IO
+        SocketManager.getInstance().init(this.server);
+
+        this.server.listen(port, '0.0.0.0', () => {
             console.log(`API Server & Web Dashboard running at http://localhost:${port}`);
+            console.log(`Monitoring Dashboard running at http://localhost:${port}/monitor`);
         });
     }
 }

@@ -6,6 +6,7 @@ import { SmartMappingService } from './ai/SmartMappingService';
 import { FileHandler } from '../utils/fileHandler';
 import fs from 'fs';
 import path from 'path';
+import { SocketManager } from './monitor/SocketManager';
 
 export interface BatchItem {
     name: string;
@@ -54,13 +55,21 @@ export class BatchService {
 
         await this.batchRepo.add(job);
 
-        // Enqueue the job without awaiting so it runs in background
-        this.queueService.enqueue(jobId, () => this.processBatch(job, templatePath, items, onProgress)).catch(console.error);
+        // Enqueue the job to Redis BullMQ
+        const { QueueClient } = require('../utils/QueueClient');
+        await QueueClient.enqueueBatch({
+            jobId,
+            userId,
+            templateId,
+            templatePath,
+            items
+        });
+
 
         return jobId;
     }
 
-    private async processBatch(
+    public async processBatch(
         job: BatchJob,
         templatePath: string,
         items: BatchItem[],
@@ -88,6 +97,7 @@ export class BatchService {
                 failedCount: job.failedCount,
                 progress: job.progress
             });
+            SocketManager.getInstance().emitJobUpdate(job.id, job.status, job.progress);
             if (onProgress) onProgress(job);
         };
 
@@ -202,6 +212,17 @@ export class BatchService {
 
         await this.zipService.compressFolder(baseDir, zipPath);
         const zipSize = this.zipService.getZipSize(zipPath);
+
+        // Upload ZIP to MinIO
+        const { MinioStorageService } = require('./storage/minioStorageService');
+        const storageService = new MinioStorageService();
+        const objectKey = `downloads/${zipFilename}`;
+        await storageService.uploadFile(objectKey, zipPath, 'application/zip');
+
+        // Delete local zip after upload
+        if (fs.existsSync(zipPath)) {
+            fs.unlinkSync(zipPath);
+        }
 
         job.status = 'completed';
         job.finishTime = Date.now();

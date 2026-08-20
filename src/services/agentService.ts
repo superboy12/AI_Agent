@@ -17,11 +17,17 @@ import { ExcelParser } from '../parser/excelParser';
 import { TemplateService } from './templateService';
 import { TemplateManager } from '../managers/templateManager';
 import { SmartMappingService } from './ai/SmartMappingService';
+import { cacheService } from './ai/CacheService';
+import { learningService } from './ai/LearningService';
+import { ExcelMergeService } from './excelMergeService';
+import { ExcelModifierService } from './excelModifierService';
 
 export class AgentService {
     public fileHandler: FileHandler;
     public docxParser: DocxParser;
     public excelParser: ExcelParser;
+    public excelMergeService: ExcelMergeService;
+    public excelModifierService: ExcelModifierService;
     public geminiService: GeminiService; // Made public for Chat access
     public deepseekService?: DeepseekService; // Made public for Chat access
     public documentEngine: DocumentEngine;
@@ -44,6 +50,8 @@ export class AgentService {
         this.fileHandler = new FileHandler();
         this.docxParser = new DocxParser();
         this.excelParser = new ExcelParser();
+        this.excelMergeService = new ExcelMergeService();
+        this.excelModifierService = new ExcelModifierService();
         this.geminiService = GeminiService.getInstance();
         if (config.deepseekApiKey) {
             // this.deepseekService = DeepseekService.getInstance();
@@ -141,6 +149,7 @@ export class AgentService {
 
             // 2b. Download and parse Excel files if provided
             let parsedExcelData = '';
+            let excelHashForCache = '';
             if (excelUrls && excelUrls.length > 0) {
                 for (let i = 0; i < excelUrls.length; i++) {
                     const excelUrl = excelUrls[i];
@@ -152,11 +161,36 @@ export class AgentService {
                     const extractedText = await this.excelParser.extractText(excelPath);
                     parsedExcelData += `\n=== Data Excel ${i + 1} ===\n${extractedText}\n========================\n`;
                 }
+                const crypto = require('crypto');
+                excelHashForCache = crypto.createHash('md5').update(parsedExcelData).digest('hex');
             }
 
-            // 3. Try Smart Mapping First (Features 1-6)
+            // [NEW] SMART CACHE CHECK
             let textData: Record<string, any> | undefined;
             let smartAnalysis: any;
+            let imagePlaceholderNames: string[] = [];
+
+            if (excelHashForCache) {
+                const cacheHit = await cacheService.checkCache(
+                    excelHashForCache, 
+                    'v1', // templateVersion
+                    userInstruction || 'default', 
+                    provider, 
+                    'processDocument'
+                );
+                
+                if (cacheHit) {
+                    console.log('[AgentService] SMART CACHE HIT! Bypassing AI Generation.');
+                    textData = cacheHit.mappingResult;
+                    if (cacheHit.metadata && cacheHit.metadata.smartAnalysis) {
+                        smartAnalysis = cacheHit.metadata.smartAnalysis;
+                        imagePlaceholderNames = smartAnalysis.fields.filter((f: any) => f.isImage).map((f: any) => f.key);
+                    }
+                }
+            }
+
+            if (!textData) {
+            // 3. Try Smart Mapping First (Features 1-6)
             try {
                 console.log(`[AgentService] Trying Smart Mapping...`);
                 await this.smartMappingService.init();
@@ -210,6 +244,7 @@ export class AgentService {
                     .filter((f: any) => f.isImage)
                     .map((f: any) => f.key);
             }
+            } // END OF SMART CACHE BLOCK
 
             console.log(`[AgentService] Image placeholders in template (in order):`, imagePlaceholderNames);
 
@@ -251,6 +286,24 @@ export class AgentService {
                 pdfPath = this.persistFile(pdfPath, outputPdfFilename);
             }
 
+            // [NEW] SAVE CACHE & LEARNING
+            if (excelHashForCache && textData) {
+                await cacheService.saveCache(
+                    excelHashForCache,
+                    'processDocument_template',
+                    'v1',
+                    userInstruction || 'default',
+                    provider,
+                    'processDocument',
+                    textData,
+                    {},
+                    { smartAnalysis },
+                    docxPath,
+                    pdfPath
+                );
+                await learningService.recordUsage(userId, 'processDocument_template', textData, imageOptions);
+            }
+
             return { documentPath: docxPath, pdfPath };
         } catch (error) {
             console.error('Error in AgentService processDocument:', error);
@@ -290,9 +343,28 @@ export class AgentService {
         let pdfPath = '';
 
         try {
-            // Try Smart Mapping First (Features 1-6)
+            // [NEW] SMART CACHE CHECK
             let textData: Record<string, any> | undefined;
             let smartAnalysis: any;
+
+            const cacheHit = await cacheService.checkCache(
+                templateId, // using templateId as proxy for excelHash since there is no excel
+                metadata.version?.toString() || '1', 
+                userInstruction || 'default', 
+                provider, 
+                'processSavedTemplate'
+            );
+            
+            if (cacheHit) {
+                console.log('[AgentService] SMART CACHE HIT! Bypassing AI Generation.');
+                textData = cacheHit.mappingResult;
+                if (cacheHit.metadata && cacheHit.metadata.smartAnalysis) {
+                    smartAnalysis = cacheHit.metadata.smartAnalysis;
+                }
+            }
+
+            if (!textData) {
+            // Try Smart Mapping First (Features 1-6)
             try {
                 console.log(`[AgentService] Trying Smart Mapping for saved template...`);
                 // Ensure initialized
@@ -331,6 +403,7 @@ export class AgentService {
                 textData = result.textData;
                 console.log(`[AgentService] Text data from ${provider}:`, JSON.stringify(textData, null, 2));
             }
+            } // END OF SMART CACHE BLOCK
 
             // Fill template
             console.log(`Filling DOCX template...`);
@@ -355,6 +428,24 @@ export class AgentService {
             docxPath = this.persistFile(docxPath, outputDocxFilename);
             if (pdfPath) {
                 pdfPath = this.persistFile(pdfPath, outputPdfFilename);
+            }
+
+            // [NEW] SAVE CACHE & LEARNING
+            if (textData) {
+                await cacheService.saveCache(
+                    templateId,
+                    metadata.name,
+                    metadata.version?.toString() || '1',
+                    userInstruction || 'default',
+                    provider,
+                    'processSavedTemplate',
+                    textData,
+                    {},
+                    { smartAnalysis },
+                    docxPath,
+                    pdfPath
+                );
+                await learningService.recordUsage(userId, metadata.name, textData, imageOptions);
             }
 
             return { documentPath: docxPath, pdfPath, templateName: metadata.name };

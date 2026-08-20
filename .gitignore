@@ -8,3 +8,9 @@ temp_deploy/
 AiAgent_backup.zip  
 test_convert.js  
 test_gen.ts 
+
+/src/generated/prisma
+
+.env.deploy
+*.zip
+*.tar.gz

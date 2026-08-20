@@ -7,6 +7,14 @@ module.exports = {
       interpreter: "none",
       cwd: __dirname,
       watch: false
+    },
+    {
+      name: "AiWorker",
+      script: "npm",
+      args: "run start:worker",
+      interpreter: "none",
+      cwd: __dirname,
+      watch: false
     }
   ]
 };

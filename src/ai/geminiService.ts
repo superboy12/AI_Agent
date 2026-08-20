@@ -108,7 +108,7 @@ Contoh output:
                 const imgData = imagesData![i];
                 try {
                     let imageBuffer = fs.readFileSync(imgData.path);
-                    
+
                     // Resize large images for AI payload to prevent "Request entity too large" (HTTP 413).
                     // This downscaling is ONLY for the AI's OCR and context extraction,
                     // it does NOT overwrite the original image file used in the document.
@@ -238,7 +238,7 @@ ${imageCountNote}`;
                 const imgData = imagesData![i];
                 try {
                     let imageBuffer = fs.readFileSync(imgData.path);
-                    
+
                     // Resize for AI payload to prevent 413 Payload Too Large
                     imageBuffer = await sharp(imageBuffer)
                         .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
@@ -300,7 +300,7 @@ ${imageCountNote}`;
                 }
             ]);
         }
-        
+
         const history = this.chatHistory.get(userId)!;
         history.push({ role: 'user', parts: [{ text: message }] });
 
@@ -331,9 +331,48 @@ ${imageCountNote}`;
      */
     public async generateSimple(prompt: string): Promise<string> {
         const response = await this.ai.models.generateContent({
-            model:    'gemini-flash-latest',
+            model: 'gemini-flash-latest',
             contents: [{ role: 'user', parts: [{ text: prompt }] }],
         });
         return response.text ?? '';
+    }
+
+    /**
+     * Parses a natural language instruction into an array of ReplacementRules.
+     * @param instruction The user's natural language instruction
+     */
+    public async parseReplacementInstruction(instruction: string): Promise<Array<{ target: string, replacement: string }>> {
+        const prompt = `Anda adalah sistem parser cerdas.
+Tugas Anda adalah mengubah instruksi penggantian teks menjadi format JSON murni yang berisi array of objects.
+Object memiliki properti "target" (kata/kalimat yang dicari) dan "replacement" (kata/kalimat pengganti).
+
+Instruksi: "${instruction}"
+\
+Contoh Output:
+[
+  { "target": "Budi", "replacement": "Andi" },
+  { "target": "Jakarta", "replacement": "Bandung" }
+]
+
+Jangan berikan penjelasan apapun. Hanya kembalikan array JSON murni.`;
+
+        const response = await this.ai.models.generateContent({
+            model: 'gemini-1.5-flash',
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        });
+
+        const responseText = response.text || '[]';
+        const cleaned = responseText
+            .replace(/^```json\s*/i, '')
+            .replace(/^```\s*/i, '')
+            .replace(/```\s*$/i, '')
+            .trim();
+
+        try {
+            return JSON.parse(cleaned);
+        } catch (error) {
+            console.error('[Gemini] Failed to parse replacement instruction:', error);
+            return [];
+        }
     }
 }

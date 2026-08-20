@@ -102,26 +102,24 @@ export class TelegramBot {
         // Command: /help
         this.bot.command('help', async (ctx) => {
             const msg = `🤖 *Panduan & Tutorial AI Document Assistant*\n\n` +
-                        `*1. Membuat Dokumen Baru (/buat & /dbuat)*\n` +
-                        `Ketik \`/buat <instruksi>\` untuk membuat dokumen atau Excel dari nol.\n` +
-                        `_Contoh:_ \`/buatkan jadwal piket format excel\`\n\n` +
-                        `*2. Menyimpan Ingatan Data (/ingat & /lupa)*\n` +
-                        `Upload file Excel/Word atau kirim teks dengan caption \`/ingat\`. Bot akan menyimpan datanya. Gunakan \`/lupa\` untuk menghapus.\n\n` +
-                        `*3. Menggunakan Template (/template)*\n` +
-                        `- \`/template upload <kat>\`: Upload DOCX sebagai template.\n` +
-                        `- \`/template list\`: Lihat daftar template.\n` +
-                        `- \`/template pakai <nomor> <instruksi>\`: Pakai template tersimpan.\n\n` +
-                        `*4. Chat Biasa (/chat & /dchat)*\n` +
+                        `*1. Manajemen Template (/save & /use)*\n` +
+                        `- \`/save <nama>\`: Upload file DOCX lalu beri caption ini untuk menyimpan ke template.\n` +
+                        `- \`/use <nama/nomor>\`: Memilih dan menggunakan template yang sudah tersimpan.\n` +
+                        `- \`/template list\`: Melihat daftar template.\n\n` +
+                        `*2. Auto-Fill & Batch Excel (/replace-excel)*\n` +
+                        `Setelah memilih template (via \`/use\` atau upload langsung), upload file \`.zip\` (berisi ratusan excel) atau \`.xlsx\` satuan lalu berikan caption:\n` +
+                        `- \`/replace-excel <instruksi ganti>\` (misal: /replace-excel ganti Budi jadi Andi)\n\n` +
+                        `*3. Menyimpan Ingatan (/ingat & /lupa)*\n` +
+                        `Kirim teks atau file dengan caption \`/ingat\` agar bot mengingat referensi data. Gunakan \`/lupa\` untuk menghapusnya.\n\n` +
+                        `*4. Buat Dokumen Baru (/buat & /dbuat)*\n` +
+                        `Ketik \`/buat <instruksi>\` (Gemini) atau \`/dbuat <instruksi>\` (Deepseek) untuk membuat dokumen baru dari nol.\n\n` +
+                        `*5. Chat Biasa (/chat & /dchat)*\n` +
                         `Ngobrol biasa dengan AI tanpa buat dokumen.\n\n` +
-                        `*5. Auto-Fill Dokumen & Ekstrak Gambar*\n` +
-                        `Upload DOCX (template placeholder \`{%nama}\`) + instruksi di caption:\n` +
-                        `- Default menggunakan AI *Gemini*.\n` +
-                        `- Tambahkan \`/deepseek\` di awal caption untuk *Deepseek*.\n` +
-                        `_Catatan:_ Anda juga bisa menyertakan upload *gambar/foto* (di Discord) atau mendeskripsikan gambar, bot akan mengekstrak informasinya ke template.\n\n` +
                         `*6. Image Engine (/image)*\n` +
-                        `Atur cara gambar ditempatkan di dokumen sebelum memproses.\n` +
-                        `Contoh: \`/image mode fit_to_width\`, \`/image layout two_col\`, \`/image shadow on\`\n` +
-                        `Ketik \`/image help\` untuk semua sub-perintah.`;
+                        `Atur penempatan gambar. Ketik \`/image help\` untuk melihat panduan tata letak gambar.\n\n` +
+                        `*7. Web Monitoring & Manual Upload*\n` +
+                        `Pantau storage dan upload file ZIP/Template berukuran besar (ratusan MB) melalui:\n` +
+                        `https://maker-tomorrow-facts-trying.trycloudflare.com/monitor/`;
             
             await ctx.reply(msg, { parse_mode: 'Markdown' });
         });
@@ -305,6 +303,47 @@ export class TelegramBot {
                         `Total Dokumen: ${histories.length}\n` +
                         `Dokumen Hari Ini: ${docsToday}`;
             await ctx.reply(msg, { parse_mode: 'Markdown' });
+        });
+
+        // Command: /cache
+        this.bot.command('cache', async (ctx) => {
+            const { cacheService } = require('../services/ai/CacheService');
+            const stats = await cacheService.getStats();
+            const desc = `📦 *Total Cached Documents:* ${stats.totalCacheEntries}\n` +
+                         `🎯 *Cache Hits:* ${stats.totalHits}\n` +
+                         `❌ *Cache Misses:* ${stats.totalMisses}\n` +
+                         `⚡ *Hit Ratio:* ${stats.hitRatio.toFixed(1)}%`;
+            await ctx.reply(`🧠 *AI Smart Cache Status*\n\n${desc}`, { parse_mode: 'Markdown' });
+        });
+
+        // Command: /learning
+        this.bot.command('learning', async (ctx) => {
+            const userId = ctx.from.id.toString();
+            const { learningService } = require('../services/ai/LearningService');
+            const profile = await learningService.getProfile(userId);
+            let recTemplate = await learningService.getRecommendation(userId);
+            
+            let desc = `🧑 *User ID:* ${userId}\n`;
+            if (recTemplate) {
+                desc += `💡 *Rekomendasi AI:* Gunakan Template *${recTemplate}* (Confidence: >90%)\n`;
+            }
+            desc += `\n*Favorite Templates:*\n`;
+            if (Object.keys(profile.favoriteTemplates).length > 0) {
+                for (const [tpl, count] of Object.entries(profile.favoriteTemplates)) {
+                    desc += `- ${tpl} (${count}x)\n`;
+                }
+            } else {
+                desc += `- Belum ada data\n`;
+            }
+            await ctx.reply(`📈 *AI Continuous Learning Profile*\n\n${desc}`, { parse_mode: 'Markdown' });
+        });
+
+        // Command: /resetlearning
+        this.bot.command('resetlearning', async (ctx) => {
+            const userId = ctx.from.id.toString();
+            const { learningService } = require('../services/ai/LearningService');
+            await learningService.resetLearning(userId);
+            await ctx.reply('✅ Profil AI Continuous Learning Anda telah direset.');
         });
 
         // ─── Template Registry Commands ──────────────────────────────────────────────
@@ -611,8 +650,128 @@ export class TelegramBot {
                     return;
                 }
 
-                // 3) Batch Processing (ZIP)
+                // 3) Batch Processing (ZIP) or Merge/Replace Excel
                 if (nameLower.endsWith('.zip')) {
+                    const captionLower = caption.toLowerCase();
+
+                    // /replaceexcel
+                    if (captionLower.startsWith('/replaceexcel')) {
+                        const instruction = caption.replace(/^\/replaceexcel/i, '').trim();
+                        if (!instruction) {
+                            await ctx.reply('❌ Mohon berikan instruksi penggantian teks (contoh: `/replaceexcel ganti Budi jadi Andi`).');
+                            return;
+                        }
+
+                        const initMsg = await ctx.reply('📥 Mengunduh file ZIP untuk diproses...');
+                        try {
+                            const fileLink = await ctx.telegram.getFileLink(document.file_id);
+                            const zipPath = await (ctx.agentService as any)['fileHandler'].downloadFile(fileLink.href, `upload_replace_${userId}_${Date.now()}.zip`);
+                            
+                            const AdmZip = require('adm-zip');
+                            const zip = new AdmZip(zipPath);
+                            const extractDir = require('path').join(process.cwd(), 'temp', `extracted_replace_${Date.now()}`);
+                            require('fs').mkdirSync(extractDir, { recursive: true });
+                            zip.extractAllTo(extractDir, true);
+                            
+                            const fs = require('fs');
+                            const path = require('path');
+                            const files = fs.readdirSync(extractDir);
+                            const excelFiles: string[] = [];
+                            
+                            for (const f of files) {
+                                if (f.toLowerCase().endsWith('.xlsx') || f.toLowerCase().endsWith('.xls')) {
+                                    excelFiles.push(path.join(extractDir, f));
+                                }
+                            }
+
+                            if (excelFiles.length === 0) {
+                                await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, '❌ Tidak ada file Excel di dalam ZIP.');
+                                return;
+                            }
+
+                            await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, '🧠 Menerjemahkan instruksi penggantian...');
+                            const rules = await ctx.agentService.geminiService.parseReplacementInstruction(instruction);
+                            
+                            if (rules.length === 0) {
+                                await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, '❌ Gagal memahami instruksi penggantian. Pastikan kalimat Anda jelas (misal: "ganti X menjadi Y").');
+                                return;
+                            }
+
+                            let rulesDesc = rules.map((r: any) => `- "${r.target}" ➔ "${r.replacement}"`).join('\n');
+                            await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, `⚙️ Menerapkan ${rules.length} aturan pada ${excelFiles.length} file...\n${rulesDesc}`);
+                            
+                            await ctx.agentService.excelModifierService.batchReplace(excelFiles, rules);
+                            
+                            const ZipService = require('../services/zipService').ZipService;
+                            const zipService = new ZipService();
+                            const outZipPath = require('path').join(process.cwd(), 'temp', `Hasil_Replace_${Date.now()}.zip`);
+                            
+                            await zipService.compressFolder(extractDir, outZipPath);
+                            
+                            await ctx.replyWithDocument({ source: outZipPath, filename: 'Hasil_Replace.zip' });
+                            
+                            await ctx.telegram.deleteMessage(ctx.chat.id, initMsg.message_id).catch(() => {});
+                            
+                            try {
+                                if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
+                                if (fs.existsSync(outZipPath)) fs.unlinkSync(outZipPath);
+                            } catch (e) {}
+
+                        } catch (e: any) {
+                            await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, `❌ Gagal memodifikasi Excel: ${e.message}`);
+                        }
+                        return;
+                    }
+
+                    // /mergeexcel
+                    if (captionLower.startsWith('/mergeexcel')) {
+                        const initMsg = await ctx.reply('📥 Mengunduh file ZIP untuk penggabungan Excel...');
+                        try {
+                            const fileLink = await ctx.telegram.getFileLink(document.file_id);
+                            const zipPath = await (ctx.agentService as any)['fileHandler'].downloadFile(fileLink.href, `upload_${userId}_${Date.now()}.zip`);
+                            
+                            const AdmZip = require('adm-zip');
+                            const zip = new AdmZip(zipPath);
+                            const extractDir = require('path').join(process.cwd(), 'temp', `extracted_${Date.now()}`);
+                            require('fs').mkdirSync(extractDir, { recursive: true });
+                            zip.extractAllTo(extractDir, true);
+                            
+                            const fs = require('fs');
+                            const path = require('path');
+                            const files = fs.readdirSync(extractDir);
+                            const excelFiles: string[] = [];
+                            
+                            for (const f of files) {
+                                if (f.toLowerCase().endsWith('.xlsx') || f.toLowerCase().endsWith('.xls')) {
+                                    excelFiles.push(path.join(extractDir, f));
+                                }
+                            }
+
+                            if (excelFiles.length < 2) {
+                                await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, '❌ Minimal butuh 2 file Excel di dalam ZIP untuk digabungkan.');
+                                return;
+                            }
+
+                            await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, '⏳ Sedang menggabungkan file Excel Anda...');
+                            
+                            const mergedPath = await ctx.agentService.excelMergeService.mergeExcelFiles(excelFiles);
+                            
+                            await ctx.replyWithDocument({ source: mergedPath, filename: 'Merged_Result.xlsx' });
+                            
+                            await ctx.telegram.deleteMessage(ctx.chat.id, initMsg.message_id).catch(() => {});
+                            
+                            try {
+                                if (fs.existsSync(extractDir)) {
+                                    fs.rmSync(extractDir, { recursive: true, force: true });
+                                }
+                            } catch (e) {}
+
+                        } catch (e: any) {
+                            await ctx.telegram.editMessageText(ctx.chat.id, initMsg.message_id, undefined, `❌ Gagal menggabungkan Excel: ${e.message}`);
+                        }
+                        return;
+                    }
+
                     if (!active) {
                         await ctx.reply('❌ Anda harus memilih template terlebih dahulu menggunakan `/use <id>` atau mengirim template DOCX.');
                         return;

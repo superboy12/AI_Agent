@@ -2,8 +2,10 @@ import { Request, Response } from 'express';
 import { JobManager } from '../managers/jobManager';
 import fs from 'fs';
 import path from 'path';
+import { MinioStorageService } from '../services/storage/minioStorageService';
 
 export class JobController {
+    private storageService = new MinioStorageService();
     public async getAllJobs(req: Request, res: Response): Promise<void> {
         try {
             const repo = JobManager.getInstance().getBatchService().getRepo();
@@ -41,10 +43,11 @@ export class JobController {
                 return;
             }
             
-            // Delete ZIP if exists
-            const zipPath = path.join(process.cwd(), 'storage', 'downloads', `${job.id}.zip`);
-            if (fs.existsSync(zipPath)) {
-                fs.unlinkSync(zipPath);
+            // Delete ZIP from MinIO
+            try {
+                await this.storageService.deleteFile(`downloads/${job.id}.zip`);
+            } catch (err) {
+                console.error('Failed to delete zip from MinIO:', err);
             }
 
             await repo.delete(job.id);
@@ -77,9 +80,9 @@ export class JobController {
                 return;
             }
 
-            const zipPath = path.join(process.cwd(), 'storage', 'downloads', fileId);
-            if (!fs.existsSync(zipPath)) {
-                res.status(404).send('<h2>Error 404: File Not Found on Disk</h2>');
+            const fileExists = await this.storageService.fileExists(`downloads/${fileId}`);
+            if (!fileExists) {
+                res.status(404).send('<h2>Error 404: File Not Found in Storage</h2>');
                 return;
             }
 
@@ -192,13 +195,9 @@ export class JobController {
                 return;
             }
 
-            const zipPath = path.join(process.cwd(), 'storage', 'downloads', fileId);
-            if (!fs.existsSync(zipPath)) {
-                res.status(404).send('File not found');
-                return;
-            }
-
-            res.download(zipPath);
+            // Generate presigned URL for download
+            const presignedUrl = await this.storageService.getPresignedUrl(`downloads/${fileId}`, 3600);
+            res.redirect(presignedUrl);
         } catch (error) {
             console.error('Error downloading file:', error);
             res.status(500).send('Failed to download file');
