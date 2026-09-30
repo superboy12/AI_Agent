@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { getGeminiRouter, GeminiRouter } from '../../ai/geminiRouter';
 import { config } from '../../config/env';
 import { TemplateField } from '../../repositories/TemplateMetadataRepository';
 import { FieldDictionary } from './FieldDictionary';
@@ -31,12 +31,12 @@ export interface MappingResult {
  */
 export class SemanticFieldMatcher {
     private static readonly LOW_CONFIDENCE_THRESHOLD = 70;
-    private ai: GoogleGenAI;
+    private router: GeminiRouter;
     private dictRepo: FieldDictionaryRepository;
     private dict: FieldDictionary;
 
     constructor(workspaceId?: string) {
-        this.ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+        this.router = getGeminiRouter();
         this.dictRepo = new FieldDictionaryRepository(workspaceId);
         this.dict = FieldDictionary.getInstance();
     }
@@ -285,17 +285,7 @@ Kembalikan HANYA JSON valid seperti ini (tanpa markdown, tanpa penjelasan):
 }`;
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-flash-latest',
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            });
-
-            const text = (response.text || '{}')
-                .replace(/^```json\s*/i, '')
-                .replace(/^```\s*/i, '')
-                .replace(/```\s*$/i, '')
-                .trim();
-
+            const text = await this.router.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
             const parsed = JSON.parse(text);
             const raw: any[] = parsed.mappings || [];
 

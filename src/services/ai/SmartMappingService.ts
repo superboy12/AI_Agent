@@ -1,4 +1,4 @@
-import { GoogleGenAI } from '@google/genai';
+import { getGeminiRouter } from '../../ai/geminiRouter';
 import { config } from '../../config/env';
 import { ExcelParser } from '../../parser/excelParser';
 import { DocxParser } from '../../parser/docxParser';
@@ -233,21 +233,15 @@ export class SmartMappingService {
     ): Promise<Record<string, string>> {
         if (!instruction && !memoryData) return {};
         
-        const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+        const router = getGeminiRouter();
         let prompt = `Extract values for these fields: ${fieldsToFill.join(', ')}.\n`;
         if (instruction) prompt += `User Instruction: ${instruction}\n`;
         if (memoryData) prompt += `Memory Data (use this as primary truth if applicable): ${memoryData}\n`;
         prompt += `Return ONLY a valid JSON object where keys are the exact field names provided and values are the extracted strings. If a field cannot be determined, set its value to "".`;
         
         try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: prompt,
-                config: {
-                    responseMimeType: 'application/json'
-                }
-            });
-            return JSON.parse(response.text || '{}');
+            const rawJSON = await router.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
+            return JSON.parse(rawJSON || '{}');
         } catch (e) {
             console.error('[SmartMapping] AI fallback failed:', e);
             return {};

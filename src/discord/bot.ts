@@ -450,7 +450,19 @@ export class DiscordBot {
                     const reply = await ai.chat(userId, text);
                     await typingMsg.edit(reply);
                 } catch (e: any) {
-                    await typingMsg.edit(`❌ Gagal merespons: ${e.message}`);
+                    // Auto-fallback to Deepseek if Gemini is unavailable (503)
+                    const isUnavailable = e.message?.includes('503') || e.message?.includes('UNAVAILABLE') || e.message?.includes('high demand');
+                    if (provider === 'gemini' && isUnavailable && agentService.deepseekService) {
+                        try {
+                            console.warn('[Discord] Gemini unavailable, falling back to Deepseek...');
+                            const fallbackReply = await agentService.deepseekService.chat(userId, text);
+                            await typingMsg.edit(`${fallbackReply}\n\n> ⚡ *Dijawab oleh Deepseek (Gemini sedang sibuk)*`);
+                        } catch (e2: any) {
+                            await typingMsg.edit(`❌ Gagal merespons: Semua layanan AI sedang sibuk, coba beberapa saat lagi.`);
+                        }
+                    } else {
+                        await typingMsg.edit(`❌ Gagal merespons: ${e.message}`);
+                    }
                 }
                 return;
             }
@@ -835,39 +847,47 @@ export class DiscordBot {
             if (msgLower.startsWith('!help') || msgLower === '!tutorial') {
                 const embed = {
                     color: 0x22C55E,
-                    title: '🤖 Panduan & Tutorial AI Document Assistant',
-                    description: 'Berikut adalah panduan lengkap cara menggunakan bot ini:',
+                    title: '🤖 Panduan Lengkap AI Document Assistant',
+                    description: 'Berikut adalah **daftar lengkap** semua perintah yang tersedia:',
                     fields: [
                         {
-                            name: '📝 1. Manajemen Template (!save & !use)',
-                            value: '- `!save <nama>`: Upload file DOCX lalu beri caption ini untuk menyimpannya ke database.\n- `!use <nama/nomor>`: Gunakan template tersimpan.\n- `!template list`: Melihat daftar template.'
+                            name: '📁 Template',
+                            value: '`!save <nama>` — Upload DOCX + pesan ini untuk simpan template\n`!use <nomor/ID>` — Pilih template tersimpan sebagai aktif\n`!template` / `!templates` — Daftar semua template\n`!delete <id>` — Hapus template\n`!rename <id> <nama baru>` — Ganti nama template\n`!info <id>` — Detail info template\n`!favorite <id>` — Tandai template sebagai favorit ⭐\n`!search <kata>` — Cari template berdasarkan nama\n`!duplicate <id>` — Duplikat template\n`!export <id>` — Export template'
                         },
                         {
-                            name: '📊 2. Auto-Fill & Batch Excel (!replace-excel)',
-                            value: 'Setelah memilih template (via `!use`), upload file `.zip` (isi ratusan `.xlsx`) atau file `.xlsx` satuan dengan caption:\n`!replace-excel <instruksi modifikasi>` (misal: !replace-excel ganti Budi jadi Andi)'
+                            name: '📊 Excel & Batch Processing',
+                            value: '`!replace-excel <instruksi>` + ZIP/XLSX — Ganti teks di ratusan Excel\nContoh: `!replace-excel ganti Budi jadi Andi`\n`!mergeexcel` + ZIP — Gabungkan banyak Excel menjadi satu file\nUpload ZIP + template aktif — Batch fill dokumen otomatis'
                         },
                         {
-                            name: '🧠 3. Menyimpan Ingatan (!ingat & !lupa)',
-                            value: 'Kirim file Excel/Word atau teks dengan pesan `!ingat`. Bot akan mengingatnya. Gunakan `!lupa` untuk menghapus.'
+                            name: '🛠️ Buat & Konversi Dokumen',
+                            value: '`!buat <instruksi>` — Buat dokumen baru dari nol (Gemini)\n`?buat <instruksi>` — Buat dokumen baru dari nol (Deepseek)\nUpload DOCX + caption — Auto-fill template langsung\n`!pdf2word` / `!pdftoword` — Konversi PDF ke Word\n`!word2pdf` / `!wordtopdf` — Konversi Word ke PDF'
                         },
                         {
-                            name: '🤖 4. Buat Dokumen Baru (!buat & ?buat)',
-                            value: 'Gunakan `!buat <instruksi>` (Gemini) atau `?buat <instruksi>` (Deepseek) untuk membuat dokumen dari nol.'
+                            name: '🧠 Memori & Referensi',
+                            value: '`!ingat <teks>` — Bot mengingat data referensi\nUpload Excel/Word + caption `!ingat` — Ingat dari file\n`!lupa` — Hapus semua memori referensi'
                         },
                         {
-                            name: '🗣️ 5. Chat Biasa (!chat / ?chat)',
-                            value: 'Gunakan `!chat <pesan>` untuk ngobrol biasa tanpa membuat dokumen.'
+                            name: '💬 Chat & AI',
+                            value: '`!chat <pesan>` — Ngobrol dengan Gemini AI\n`?chat <pesan>` — Ngobrol dengan Deepseek AI\n`!chat clear` — Reset riwayat percakapan'
                         },
                         {
-                            name: '🖼️ 6. Image Engine (!image)',
-                            value: 'Atur cara gambar ditempatkan di dokumen.\nContoh: `!image mode fit_to_width`, `!image layout grid`'
+                            name: '🖼️ Image Engine',
+                            value: '`!image mode <mode>` — Atur cara gambar ditempatkan\n`!image layout <type>` — Atur tata letak gambar (grid, dll)\n`!image resize <75%|400x300>` — Ubah ukuran gambar\n`!image border <px> [#hex]` — Tambah border\n`!image shadow on|off` — Aktifkan shadow\n`!image watermark [%]` — Mode watermark\n`!image caption on|off` — Caption otomatis\n`!image status` — Lihat pengaturan aktif\n`!image reset` — Reset semua pengaturan gambar'
                         },
                         {
-                            name: '🌐 7. Web Monitoring & Manual Upload',
-                            value: 'Pantau storage dan upload file ZIP/Template berukuran besar melalui:\nhttps://maker-tomorrow-facts-trying.trycloudflare.com/monitor/'
+                            name: '📂 Workspace',
+                            value: '`!workspace list` — Daftar workspace\n`!workspace switch <nama>` — Pindah ke workspace lain\n`!workspace switch global` — Kembali ke workspace global'
+                        },
+                        {
+                            name: '📈 Statistik & Log',
+                            value: '`!dashboard` — Statistik ringkas (template & dokumen)\n`!history` — 10 riwayat dokumen terakhir Anda\n`!setting` — Lihat pengaturan sistem'
+                        },
+                        {
+                            name: '🌐 Web Dashboard & Web Chat',
+                            value: 'Monitor storage, upload file besar, & chat langsung via web:\nhttps://couples-coleman-specifies-plates.trycloudflare.com/monitor/'
                         }
                     ],
-                    footer: { text: 'Ketik !help kapan saja untuk melihat pesan ini.' }
+                    footer: { text: 'Ketik !help kapan saja untuk melihat daftar ini.' }
                 };
                 await message.reply({ embeds: [embed] });
                 return;

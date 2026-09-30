@@ -99,28 +99,67 @@ export class TelegramBot {
             await ctx.reply('Perintah /workspace tersedia:\n- `/workspace list`\n- `/workspace switch <nama>`\n- `/workspace switch global`', { parse_mode: 'Markdown' });
         });
 
-        // Command: /help
         this.bot.command('help', async (ctx) => {
-            const msg = `🤖 *Panduan & Tutorial AI Document Assistant*\n\n` +
-                        `*1. Manajemen Template (/save & /use)*\n` +
-                        `- \`/save <nama>\`: Upload file DOCX lalu beri caption ini untuk menyimpan ke template.\n` +
-                        `- \`/use <nama/nomor>\`: Memilih dan menggunakan template yang sudah tersimpan.\n` +
-                        `- \`/template list\`: Melihat daftar template.\n\n` +
-                        `*2. Auto-Fill & Batch Excel (/replace-excel)*\n` +
-                        `Setelah memilih template (via \`/use\` atau upload langsung), upload file \`.zip\` (berisi ratusan excel) atau \`.xlsx\` satuan lalu berikan caption:\n` +
-                        `- \`/replace-excel <instruksi ganti>\` (misal: /replace-excel ganti Budi jadi Andi)\n\n` +
-                        `*3. Menyimpan Ingatan (/ingat & /lupa)*\n` +
-                        `Kirim teks atau file dengan caption \`/ingat\` agar bot mengingat referensi data. Gunakan \`/lupa\` untuk menghapusnya.\n\n` +
-                        `*4. Buat Dokumen Baru (/buat & /dbuat)*\n` +
-                        `Ketik \`/buat <instruksi>\` (Gemini) atau \`/dbuat <instruksi>\` (Deepseek) untuk membuat dokumen baru dari nol.\n\n` +
-                        `*5. Chat Biasa (/chat & /dchat)*\n` +
-                        `Ngobrol biasa dengan AI tanpa buat dokumen.\n\n` +
-                        `*6. Image Engine (/image)*\n` +
-                        `Atur penempatan gambar. Ketik \`/image help\` untuk melihat panduan tata letak gambar.\n\n` +
-                        `*7. Web Monitoring & Manual Upload*\n` +
-                        `Pantau storage dan upload file ZIP/Template berukuran besar (ratusan MB) melalui:\n` +
-                        `https://maker-tomorrow-facts-trying.trycloudflare.com/monitor/`;
-            
+            const msg =
+                `🤖 *Panduan Lengkap AI Document Assistant*\n\n` +
+
+                `━━━ 📁 TEMPLATE ━━━\n` +
+                `*/save <nama>* — Upload DOCX + caption ini untuk simpan template\n` +
+                `*/use <nomor/ID>* — Pilih template tersimpan sebagai aktif\n` +
+                `*/template list* — Daftar semua template\n` +
+                `*/current* — Cek template yang sedang aktif\n` +
+                `*/lupatemplate* — Hapus pilihan template aktif\n\n` +
+
+                `━━━ 📊 EXCEL & BATCH ━━━\n` +
+                `*/replace-excel <instruksi>* + file ZIP/XLSX\n` +
+                `  → Ganti teks di ratusan Excel (misal: ganti Budi jadi Andi)\n` +
+                `*/mergeexcel* + file ZIP\n` +
+                `  → Gabungkan banyak Excel menjadi satu file\n` +
+                `Upload ZIP + template aktif → Batch fill otomatis (ratusan DOCX)\n\n` +
+
+                `━━━ 🛠️ BUAT DOKUMEN ━━━\n` +
+                `*/buat <instruksi>* — Buat dokumen baru dari nol (Gemini)\n` +
+                `*/dbuat <instruksi>* — Buat dokumen baru dari nol (Deepseek)\n` +
+                `Upload DOCX + caption instruksi → Auto-fill template langsung\n\n` +
+
+                `━━━ 🧠 MEMORI & REFERENSI ━━━\n` +
+                `*/ingat <teks>* — Bot mengingat data referensi (teks)\n` +
+                `Upload Excel/DOCX + caption /ingat → Bot mengingat dari file\n` +
+                `*/lupa* — Hapus semua memori referensi\n\n` +
+
+                `━━━ 💬 CHAT & AI ━━━\n` +
+                `*/chat <pesan>* — Ngobrol dengan Gemini AI\n` +
+                `*/dchat <pesan>* — Ngobrol dengan Deepseek AI\n` +
+                `*/chat clear* — Reset riwayat percakapan\n\n` +
+
+                `━━━ 🖼️ IMAGE ENGINE ━━━\n` +
+                `*/image help* — Panduan lengkap pengaturan gambar\n` +
+                `*/image mode <mode>* — Atur cara gambar ditempatkan\n` +
+                `*/image layout <type>* — Atur tata letak gambar\n` +
+                `*/image resize <75%|400x300>* — Ubah ukuran gambar\n` +
+                `*/image border <px> [#hex]* — Tambah border\n` +
+                `*/image shadow on|off* — Aktifkan/nonaktifkan shadow\n` +
+                `*/image watermark [%]* — Mode watermark\n` +
+                `*/image caption on|off* — Caption otomatis\n` +
+                `*/image status* — Lihat pengaturan aktif\n` +
+                `*/image reset* — Reset semua pengaturan gambar\n\n` +
+
+                `━━━ 📂 WORKSPACE ━━━\n` +
+                `*/workspace list* — Daftar workspace\n` +
+                `*/workspace switch <nama>* — Pindah ke workspace lain\n\n` +
+
+                `━━━ 📈 STATISTIK & LOG ━━━\n` +
+                `*/dashboard* — Statistik ringkas (template & dokumen)\n` +
+                `*/history* — 10 riwayat dokumen terakhir Anda\n` +
+                `*/cache* — Statistik AI Smart Cache\n` +
+                `*/learning* — Profil AI Continuous Learning Anda\n` +
+                `*/resetlearning* — Reset profil AI Learning\n` +
+                `*/setting* — Pengaturan sistem\n\n` +
+
+                `━━━ 🌐 WEB DASHBOARD ━━━\n` +
+                `Monitor storage, upload file besar, & Web Chat:\n` +
+                `https://couples-coleman-specifies-plates.trycloudflare.com/monitor/`;
+
             await ctx.reply(msg, { parse_mode: 'Markdown' });
         });
 
@@ -525,7 +564,19 @@ export class TelegramBot {
                 const reply = await ai.chat(userId, text);
                 await ctx.telegram.editMessageText(ctx.chat.id, typingMsg.message_id, undefined, reply);
             } catch (e: any) {
-                await ctx.telegram.editMessageText(ctx.chat.id, typingMsg.message_id, undefined, `❌ Gagal merespons: ${e.message}`);
+                // Auto-fallback to Deepseek if Gemini is unavailable (503)
+                const isUnavailable = e.message?.includes('503') || e.message?.includes('UNAVAILABLE') || e.message?.includes('high demand');
+                if (!isDeepseek && isUnavailable && ctx.agentService.deepseekService) {
+                    try {
+                        console.warn('[Telegram] Gemini unavailable, falling back to Deepseek...');
+                        const fallbackReply = await ctx.agentService.deepseekService.chat(userId, text);
+                        await ctx.telegram.editMessageText(ctx.chat.id, typingMsg.message_id, undefined, `${fallbackReply}\n\n⚡ _Dijawab oleh Deepseek (Gemini sedang sibuk)_`);
+                    } catch (e2: any) {
+                        await ctx.telegram.editMessageText(ctx.chat.id, typingMsg.message_id, undefined, `❌ Semua layanan AI sedang sibuk, coba beberapa saat lagi.`);
+                    }
+                } else {
+                    await ctx.telegram.editMessageText(ctx.chat.id, typingMsg.message_id, undefined, `❌ Gagal merespons: ${e.message}`);
+                }
             }
         };
 

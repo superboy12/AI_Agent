@@ -8,6 +8,7 @@ import { WorkspaceController } from '../controllers/workspaceController';
 import { ImageController } from '../controllers/imageController';
 import { JobController } from '../controllers/jobController';
 import { TemplateController } from '../controllers/templateController';
+import { ChatController } from '../controllers/chatController';
 import { config } from '../config/env';
 
 export class ApiServer {
@@ -17,6 +18,7 @@ export class ApiServer {
     private imageController: ImageController;
     private jobController: JobController;
     private templateController: TemplateController;
+    private chatController: ChatController;
     private upload: multer.Multer;
 
     constructor() {
@@ -26,6 +28,7 @@ export class ApiServer {
         this.imageController = new ImageController();
         this.jobController = new JobController();
         this.templateController = new TemplateController();
+        this.chatController = new ChatController();
         // Increase limit for large ZIP uploads
         this.upload = multer({ dest: 'storage/temp/', limits: { fileSize: 500 * 1024 * 1024 } });
 
@@ -102,6 +105,9 @@ export class ApiServer {
         this.app.delete('/api/jobs/:id', this.jobController.deleteJob);
         this.app.get('/download/:fileId', this.jobController.viewDownloadPage.bind(this.jobController));
         this.app.get('/api/download/raw/:fileId', this.jobController.downloadZipRaw.bind(this.jobController));
+
+        // ─── Chat Route ──────────────────────────────────────────────
+        this.app.post('/api/chat', this.upload.single('file'), this.chatController.handleChat);
     }
 
     public start() {

@@ -1,4 +1,5 @@
-import { GoogleGenAI, Part } from '@google/genai';
+import { Part } from '@google/genai';
+import { getGeminiRouter, GeminiRouter } from './geminiRouter';
 import fs from 'fs';
 import sharp from 'sharp';
 import { config } from '../config/env';
@@ -14,11 +15,11 @@ export interface GeminiDocumentResult {
 }
 
 export class GeminiService {
-    private ai: GoogleGenAI;
+    private router: GeminiRouter;
     private static instance: GeminiService;
 
     private constructor() {
-        this.ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
+        this.router = getGeminiRouter();
     }
 
     public static getInstance(): GeminiService {
@@ -132,28 +133,18 @@ Contoh output:
         }
 
         try {
-            console.log('[Gemini] Sending request to Gemini API...');
-
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-flash-latest',
-                contents: [{ role: 'user', parts }],
-            });
-
-            const responseText = response.text || '{}';
-            console.log('[Gemini] Raw response:', responseText);
-
-            const cleaned = responseText
+            console.log('[Gemini] Sending request to Gemini Router...');
+            
+            const raw = await this.router.generateContent([{ role: 'user', parts }]);
+            const cleaned = raw
                 .replace(/^```json\s*/i, '')
                 .replace(/^```\s*/i, '')
                 .replace(/```\s*$/i, '')
                 .trim();
-
             const textData = JSON.parse(cleaned);
             return { textData, imagePlaceholderNames };
         } catch (error: any) {
             console.error('[Gemini] Full error:', error?.message || error);
-            if (error?.status) console.error('[Gemini] HTTP Status:', error.status);
-            if (error?.errorDetails) console.error('[Gemini] Error Details:', JSON.stringify(error.errorDetails));
             throw new Error(`Gagal memproses instruksi dengan AI Gemini: ${error?.message || 'Unknown error'}`);
         }
     }
@@ -259,21 +250,13 @@ ${imageCountNote}`;
         }
 
         try {
-            console.log('[Gemini] Sending document structure request to Gemini API...');
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-flash-latest',
-                contents: [{ role: 'user', parts }],
-            });
-
-            const responseText = response.text || '{}';
-            console.log('[Gemini] Raw structure response:', responseText);
-
-            const cleaned = responseText
+            console.log('[Gemini] Sending document structure request to Gemini Router...');
+            const raw = await this.router.generateContent([{ role: 'user', parts }]);
+            const cleaned = raw
                 .replace(/^```json\s*/i, '')
                 .replace(/^```\s*/i, '')
                 .replace(/```\s*$/i, '')
                 .trim();
-
             return JSON.parse(cleaned);
         } catch (error: any) {
             console.error('[Gemini] Full error:', error?.message || error);
@@ -288,15 +271,14 @@ ${imageCountNote}`;
 
     public async chat(userId: string, message: string): Promise<string> {
         if (!this.chatHistory.has(userId)) {
-            // Initialize with system prompt
             this.chatHistory.set(userId, [
                 {
                     role: 'user',
-                    parts: [{ text: 'Anda adalah AI Asisten profesional untuk pembuatan dokumen. Berikan jawaban yang singkat, padat, dan ramah. Gunakan bahasa Indonesia.' }]
+                    parts: [{ text: 'Anda adalah AI Asisten profesional. Jika pengguna meminta dibuatkan file, laporan, kode, atau dokumen panjang, Anda HARUS mengembalikan isinya di dalam tag XML seperti ini:\n<file name="nama_file_yang_sesuai.txt">\nIsi dokumen di sini\n</file>\nBerikan jawaban yang singkat dan padat.' }]
                 },
                 {
                     role: 'model',
-                    parts: [{ text: 'Baik, saya mengerti. Saya siap membantu Anda.' }]
+                    parts: [{ text: 'Baik, saya mengerti. Saya akan menggunakan tag <file> jika diminta membuat file atau laporan.' }]
                 }
             ]);
         }
@@ -305,19 +287,13 @@ ${imageCountNote}`;
         history.push({ role: 'user', parts: [{ text: message }] });
 
         try {
-            const response = await this.ai.models.generateContent({
-                model: 'gemini-flash-latest',
-                contents: history,
-            });
-
-            const reply = response.text || '';
+            const reply = await this.router.generateContent(history);
             history.push({ role: 'model', parts: [{ text: reply }] });
-
             return reply;
         } catch (error: any) {
-            console.error('[Gemini Chat] Error:', error);
-            history.pop(); // Revert user message on error
-            throw new Error(`Gagal menghubungi AI: ${error?.message || 'Unknown error'}`);
+            console.error('[Gemini Chat] Router error:', error);
+            history.pop();
+            throw error;
         }
     }
 
@@ -325,16 +301,60 @@ ${imageCountNote}`;
         this.chatHistory.delete(userId);
     }
 
+    public async chatWithFile(userId: string, message: string, file: Express.Multer.File): Promise<string> {
+        if (!this.chatHistory.has(userId)) {
+            this.chatHistory.set(userId, [
+                { role: 'user', parts: [{ text: 'Anda adalah AI Asisten. Jika pengguna meminta dibuatkan file, laporan, kode, atau dokumen panjang, Anda HARUS mengembalikan isinya di dalam tag XML seperti ini:\n<file name="nama_file.txt">\nIsi dokumen di sini\n</file>\nBantu saya analisis dokumen/gambar yang diberikan.' }] },
+                { role: 'model', parts: [{ text: 'Baik, saya akan menggunakan tag <file> jika diminta membuat file atau laporan.' }] }
+            ]);
+        }
+
+        const history = this.chatHistory.get(userId)!;
+        
+        let mimeType = file.mimetype;
+        // Adjust for Gemini supported mimetypes if needed
+        if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+             // Currently gemini supports pdf, plain text, csv, and some others, but docx needs to be converted or passed as text.
+             // We can just read the file if it's text, or pass base64 directly for images/pdf.
+        }
+
+        const fileData = fs.readFileSync(file.path);
+        const base64Data = fileData.toString('base64');
+        
+        const filePart = {
+            inlineData: {
+                data: base64Data,
+                mimeType: mimeType
+            }
+        };
+
+        const newParts: any[] = [filePart];
+        if (message) {
+            newParts.push({ text: message });
+        }
+
+        history.push({ role: 'user', parts: newParts });
+
+        try {
+            const reply = await this.router.generateContent(history);
+            history.push({ role: 'model', parts: [{ text: reply }] });
+            // Clean up temp file
+            fs.unlinkSync(file.path);
+            return reply;
+        } catch (error: any) {
+            console.error('[Gemini Chat] Router error with file:', error);
+            history.pop();
+            try { fs.unlinkSync(file.path); } catch (e) {}
+            throw error;
+        }
+    }
+
     /**
      * One-shot generation — no chat history, no side effects.
      * Used by ImageEngine's auto_ai mode resolver.
      */
     public async generateSimple(prompt: string): Promise<string> {
-        const response = await this.ai.models.generateContent({
-            model: 'gemini-flash-latest',
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        });
-        return response.text ?? '';
+        return this.router.generateContent([{ role: 'user', parts: [{ text: prompt }] }]);
     }
 
     /**
@@ -356,17 +376,7 @@ Contoh Output:
 
 Jangan berikan penjelasan apapun. Hanya kembalikan array JSON murni.`;
 
-        const response = await this.ai.models.generateContent({
-            model: 'gemini-1.5-flash',
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        });
-
-        const responseText = response.text || '[]';
-        const cleaned = responseText
-            .replace(/^```json\s*/i, '')
-            .replace(/^```\s*/i, '')
-            .replace(/```\s*$/i, '')
-            .trim();
+        const responseText = await this.router.generateJSON([{ role: 'user', parts: [{ text: prompt }] }]);
 
         try {
             return JSON.parse(cleaned);

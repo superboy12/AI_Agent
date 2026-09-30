@@ -7,6 +7,11 @@ dotenv.config();
 export const config = {
     telegramToken: process.env.TELEGRAM_TOKEN || '',
     geminiApiKey: process.env.GEMINI_API_KEY || '',
+    geminiApiKeys: [
+        process.env.GEMINI_API_KEY || '',
+        process.env.GEMINI_API_KEY_2 || '',
+        process.env.GEMINI_API_KEY_3 || '',
+    ].filter(k => k.trim() !== ''),
     deepseekApiKey: process.env.DEEPSEEK_API_KEY || '',
     discordToken: process.env.DISCORD_TOKEN || '',
     publicUrl: process.env.PUBLIC_URL || 'http://202.155.143.185',

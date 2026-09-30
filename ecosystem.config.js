@@ -15,6 +15,12 @@ module.exports = {
       interpreter: "none",
       cwd: __dirname,
       watch: false
+    },
+    {
+      name: "MinIO",
+      script: "start-minio.sh",
+      cwd: "/home/ubuntu",
+      watch: false
     }
   ]
 };

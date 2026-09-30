@@ -10,48 +10,52 @@ datasource db {
 }
 
 model Workspace {
-  id           String   @id @default(uuid())
+  id           String  @id @default(uuid())
   name         String
   description  String
   icon         String
   color        String
-  isFavorite   Boolean  @default(false)
+  isFavorite   Boolean @default(false)
   createdAt    BigInt
   lastOpenedAt BigInt
-  
+
   // Stats
   documentCount Int @default(0)
   templateCount Int @default(0)
   chatCount     Int @default(0)
 
-  templates    Template[]
+  templates Template[]
 }
 
 model Template {
-  id           String   @id @default(uuid())
-  name         String
-  category     String
-  uploadDate   BigInt
-  sizeBytes    BigInt
-  usageCount   Int      @default(0)
-  isFavorite   Boolean  @default(false)
-  filePath     String
-  fileType     String?
-  version      Int?     @default(1)
-  
-  workspaceId  String?
-  workspace    Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id         String  @id @default(uuid())
+  name       String
+  category   String
+  uploadDate BigInt
+  sizeBytes  BigInt
+  usageCount Int     @default(0)
+  isFavorite Boolean @default(false)
+  filePath   String
+  fileType   String?
+  version    Int?    @default(1)
+
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  jobs Job[]
 }
 
 model Job {
-  id           String   @id
+  id           String               @id
   userId       String
+  userProfile  UserLearningProfile? @relation(fields: [userId], references: [userId], onDelete: Cascade)
   templateId   String
-  status       String   // 'queue' | 'processing' | 'completed' | 'failed'
-  progress     Int      @default(0)
+  template     Template?            @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  status       String // 'queue' | 'processing' | 'completed' | 'failed'
+  progress     Int                  @default(0)
   totalFiles   Int
-  successCount Int      @default(0)
-  failedCount  Int      @default(0)
+  successCount Int                  @default(0)
+  failedCount  Int                  @default(0)
   startTime    BigInt
   finishTime   BigInt?
   downloadUrl  String?
@@ -60,7 +64,7 @@ model Job {
 }
 
 model CacheEntry {
-  id                 String   @id
+  id                 String  @id
   excelHash          String
   templateName       String
   templateVersion    String
@@ -73,15 +77,17 @@ model CacheEntry {
   outputPdfPath      String?
   createdAt          BigInt
   sizeBytes          BigInt
-  hits               Int      @default(0)
+  hits               Int     @default(0)
 }
 
 model UserLearningProfile {
-  userId               String   @id
-  favoriteTemplates    Json     // { [templateId: string]: number }
+  userId               String  @id
+  favoriteTemplates    Json // { [templateId: string]: number }
   favoriteDateFormat   String?
   favoriteLanguage     String?
   favoriteWritingStyle String?
   favoriteImageOptions Json?
-  confidenceScores     Json     // { [key: string]: number }
+  confidenceScores     Json // { [key: string]: number }
+
+  jobs Job[]
 }
